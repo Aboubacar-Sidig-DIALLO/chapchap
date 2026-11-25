@@ -8,26 +8,22 @@ import { pairOf } from './social.utils';
 
 /** Conversation demandée par le client (il ne fabrique jamais lui-même la clé). */
 export type ConversationRef =
-  | { type: 'salon' }
-  | { type: 'direct'; userId: string }
-  | { type: 'group'; groupId: string };
+  { type: 'direct'; userId: string } | { type: 'group'; groupId: string };
 
 /** Conversation dont l'accès a été vérifié. */
 export interface Conversation {
   /** Identifiant unique côté serveur (nom de la salle Socket.io). */
   key: string;
   type: ConversationRef['type'];
-  /** Nom affiché : l'ami, le groupe ou « Salon général ». */
+  /** Nom affiché : l'ami ou le groupe. */
   title: string;
-  /** Membres (ami + soi, ou membres du groupe) ; `null` pour le salon, ouvert à tous. */
-  memberIds: string[] | null;
+  /** Membres : l'ami et soi, ou les membres du groupe. */
+  memberIds: string[];
   /** Ami concerné (conversation `direct`). */
   friendId?: string;
   /** Groupe concerné (conversation `group`). */
   groupId?: string;
 }
-
-export const SALON_KEY = 'salon';
 
 /** Même clé pour les deux amis, quel que soit celui qui ouvre la conversation. */
 export function directKey(userId: string, otherId: string) {
@@ -52,7 +48,6 @@ function isId(value: unknown): value is string {
 /** Lecture prudente de ce qu'envoie le client. */
 export function parseConversationRef(value: unknown): ConversationRef | null {
   const ref = (value ?? {}) as Record<string, unknown>;
-  if (ref.type === 'salon') return { type: 'salon' };
   if (ref.type === 'direct' && isId(ref.userId)) {
     return { type: 'direct', userId: ref.userId };
   }
@@ -63,8 +58,8 @@ export function parseConversationRef(value: unknown): ConversationRef | null {
 }
 
 /**
- * Qui peut parler où : le salon est ouvert à tous ; une conversation privée
- * exige d'être amis ; une conversation de groupe, d'en être membre.
+ * Qui peut parler où : une conversation privée exige d'être amis ; une
+ * conversation de groupe, d'en être membre.
  */
 @Injectable()
 export class ConversationAccessService {
@@ -76,14 +71,6 @@ export class ConversationAccessService {
     ref: ConversationRef,
   ): Promise<Conversation | null> {
     switch (ref.type) {
-      case 'salon':
-        return {
-          key: SALON_KEY,
-          type: 'salon',
-          title: 'Salon général',
-          memberIds: null,
-        };
-
       case 'direct': {
         if (!(await this.areFriends(userId, ref.userId))) return null;
         const friend = await this.prisma.user.findUnique({

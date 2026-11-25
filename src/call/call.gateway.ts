@@ -36,8 +36,8 @@ function parseMedia(value: unknown): CallMedia {
 }
 
 /**
- * Signalisation du direct (appel audio / vidéo) de chaque conversation : le
- * salon, un ami ou un groupe. Le son et l'image passent directement d'un
+ * Signalisation du direct (appel audio / vidéo) de chaque conversation, avec
+ * un ami ou dans un groupe. Le son et l'image passent directement d'un
  * navigateur à l'autre (WebRTC) ; le serveur tient la liste des participants
  * et relaie les messages de mise en relation, sans jamais sortir de la conversation.
  */

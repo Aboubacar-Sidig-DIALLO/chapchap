@@ -43,8 +43,8 @@ type SocialSocket = Socket<
 const userRoom = (userId: string) => `user:${userId}`;
 
 /**
- * Temps réel de l'accueil (espace `/social`, distinct du salon : être sur
- * l'accueil ne rend pas « en ligne » dans le chat). Relaie aussi la présence
+ * Temps réel de l'accueil (espace `/social`, distinct des conversations).
+ * Relaie aussi la présence
  * de chacun (en ligne, hors ligne depuis…) à ses seuls amis, et les appels
  * des conversations privées et de groupe à leurs seuls membres.
  *
@@ -138,7 +138,7 @@ export class SocialGateway
     if (conversation.groupId) {
       return this.groupsService.memberIds(conversation.groupId);
     }
-    return conversation.memberIds ?? [];
+    return conversation.memberIds;
   }
 
   /**
@@ -169,6 +169,6 @@ function targetFor(
       groupName: conversation.title,
     };
   }
-  const friendId = conversation.memberIds?.find((id) => id !== userId);
+  const friendId = conversation.memberIds.find((id) => id !== userId);
   return friendId ? { type: 'direct', userId: friendId } : null;
 }

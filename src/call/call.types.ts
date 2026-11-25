@@ -8,7 +8,7 @@ export interface CallMedia {
 }
 
 /**
- * Participant au direct du salon. `peerId` est l'identifiant de sa connexion
+ * Participant au direct d'une conversation. `peerId` est l'identifiant de sa connexion
  * (un onglet), qui sert d'adresse pour la signalisation WebRTC.
  */
 export interface CallParticipant extends CallMedia {

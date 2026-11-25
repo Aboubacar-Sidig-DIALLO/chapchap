@@ -71,8 +71,8 @@ function isPercent(value: unknown): value is number {
 }
 
 /**
- * Discussions en temps réel : le salon, les conversations entre amis et celles
- * des groupes. Chaque connexion ouvre une seule conversation (sa « salle »),
+ * Discussions en temps réel : les conversations entre amis et celles des
+ * groupes. Chaque connexion ouvre une seule conversation (sa « salle »),
  * et tout ce qui s'y passe reste dans cette salle.
  */
 @WebSocketGateway({ cors: { origin: CLIENT_ORIGIN, credentials: true } })
@@ -351,13 +351,11 @@ export class ChatGateway
 
   /**
    * Signale le nouveau message aux autres membres d'une conversation privée ou
-   * de groupe, sur leur accueil (sans son contenu). Le salon n'en déclenche pas.
+   * de groupe, sur leur accueil (sans son contenu).
    */
   private notifyMembers(client: ChatSocket, message: ChatMessage) {
     const { user, conversation } = client.data;
-    const recipients = (conversation.memberIds ?? []).filter(
-      (id) => id !== user.id,
-    );
+    const recipients = conversation.memberIds.filter((id) => id !== user.id);
     const from = toPublicUser(message.author);
 
     if (conversation.type === 'direct') {
@@ -393,9 +391,7 @@ export class ChatGateway
     const members = sockets[0]?.data.conversation.memberIds;
     const everyoneRevoked =
       conversationKey.startsWith('direct:') ||
-      (members !== undefined &&
-        members !== null &&
-        members.every((id) => userIds.includes(id)));
+      (members?.every((id) => userIds.includes(id)) ?? false);
     if (everyoneRevoked) this.chatService.deleteConversation(conversationKey);
   }
 

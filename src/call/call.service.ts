@@ -101,7 +101,7 @@ class CallRoom {
 }
 
 /**
- * Les directs en cours, un par conversation (salon, ami, groupe), en mémoire.
+ * Les directs en cours, un par conversation (ami ou groupe), en mémoire.
  * Le son et l'image ne passent jamais par le serveur (WebRTC).
  */
 @Injectable()

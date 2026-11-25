@@ -18,7 +18,7 @@ export interface OngoingCallUpdate {
  * sonner les membres quand un appel commence.
  *
  * Le module d'appel le tient à jour ; l'accueil le lit et relaie ses
- * changements (`changes$`). Le salon, ouvert à tous, n'est pas suivi.
+ * changements (`changes$`).
  */
 @Injectable()
 export class OngoingCallsService {
@@ -40,8 +40,6 @@ export class OngoingCallsService {
     participants: { id: string; name: string }[],
     startedAt: string | null,
   ) {
-    if (conversation.type === 'salon') return;
-
     const previous = this.calls.get(conversation.key);
     const users = uniqueById(participants).map(toPublicUser);
 

@@ -48,12 +48,12 @@ describe('ChatService (ménage des conversations)', () => {
 
   it('garde une conversation vide tant que quelqu’un y est connecté', () => {
     const service = new ChatService();
-    const store = service.conversation('salon');
-    service.addConnection('socket-1', alice, 'salon');
+    const store = service.conversation('group:g1');
+    service.addConnection('socket-1', alice, 'group:g1');
 
     service.removeExpired(sentAt + MESSAGE_TTL_MS);
 
-    expect(service.conversation('salon')).toBe(store);
+    expect(service.conversation('group:g1')).toBe(store);
   });
 
   it('efface tous les messages d’une conversation fermée', () => {

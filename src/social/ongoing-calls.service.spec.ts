@@ -65,15 +65,4 @@ describe('OngoingCallsService', () => {
     expect(updates).toHaveLength(2);
     expect(updates[1].call).toBeNull();
   });
-
-  it('ne suit pas le salon, ouvert à tous', () => {
-    service.update(
-      { key: 'salon', type: 'salon', title: 'Salon', memberIds: null },
-      [ana],
-      START,
-    );
-
-    expect(service.get('salon')).toBeNull();
-    expect(updates).toHaveLength(0);
-  });
 });
