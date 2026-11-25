@@ -19,6 +19,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import type { Response } from 'express';
 import { diskStorage } from 'multer';
 import type { Attachment } from './attachment.types';
@@ -45,6 +46,7 @@ export class AttachmentsController {
   constructor(private readonly attachmentsService: AttachmentsService) {}
 
   /**
+   * Réservé aux utilisateurs connectés (garde globale de Better Auth).
    * Le fichier est écrit directement sur disque (pas de mise en mémoire).
    * Un message vocal joint sa durée et sa forme d'onde (`durationMs`, `waveform`).
    */
@@ -70,10 +72,17 @@ export class AttachmentsController {
   /**
    * `?download` force le téléchargement, y compris pour une image.
    * Les requêtes partielles (`Range`) permettent de lire l'audio et de s'y déplacer.
+   *
+   * Public : l'identifiant, aléatoire (UUID), sert de clé d'accès. Les balises
+   * `<img>` / `<audio>` qui chargent ces fichiers restent ainsi indépendantes
+   * du cookie de session.
+   *
+   * Éphémère : introuvable une fois expirée, et le navigateur ne la garde
+   * pas en cache au-delà de son expiration.
    */
   @Get(':id')
+  @AllowAnonymous()
   @Header('X-Content-Type-Options', 'nosniff')
-  @Header('Cache-Control', 'private, max-age=31536000, immutable')
   @Header('Accept-Ranges', 'bytes')
   download(
     @Param('id') id: string,
@@ -83,6 +92,12 @@ export class AttachmentsController {
   ): StreamableFile {
     const stored = this.attachmentsService.find(id);
     if (!stored) throw new NotFoundException('Pièce jointe introuvable');
+
+    const secondsLeft = Math.max(
+      0,
+      Math.floor((stored.expiresAt - Date.now()) / 1000),
+    );
+    res.setHeader('Cache-Control', `private, max-age=${secondsLeft}`);
 
     const { name, mimeType, size } = stored.attachment;
     const isInline = download === undefined && INLINE_TYPES.has(mimeType);

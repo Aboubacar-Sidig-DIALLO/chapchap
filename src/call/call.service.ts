@@ -13,9 +13,8 @@ interface CallHistory {
   hadVideo: boolean;
 }
 
-/** Le direct du salon, en mémoire : qui y est, avec quel média, et son histoire. */
-@Injectable()
-export class CallService {
+/** Le direct d'une conversation : qui y est, avec quel média, et son histoire. */
+class CallRoom {
   private readonly participants = new Map<string, CallParticipant>();
   private history: CallHistory | null = null;
 
@@ -29,6 +28,15 @@ export class CallService {
 
   isFull(): boolean {
     return this.participants.size >= MAX_CALL_PARTICIPANTS;
+  }
+
+  isEmpty(): boolean {
+    return this.participants.size === 0;
+  }
+
+  /** Date ISO 8601 du début du direct en cours ; `null` s'il n'y en a pas. */
+  startedAt(): string | null {
+    return this.history?.startedAt ?? null;
   }
 
   /** Ajoute le participant ; retourne ceux qui étaient déjà là (à qui il se connecte). */
@@ -77,7 +85,7 @@ export class CallService {
    * trace (une seule fois) ; sinon `null`.
    */
   endIfEmpty(): CallSummary | null {
-    if (this.participants.size > 0 || !this.history) return null;
+    if (!this.isEmpty() || !this.history) return null;
 
     const { startedAt, users, hadVideo } = this.history;
     this.history = null;
@@ -89,5 +97,29 @@ export class CallService {
       participants: [...users.values()],
       hadVideo,
     };
+  }
+}
+
+/**
+ * Les directs en cours, un par conversation (salon, ami, groupe), en mémoire.
+ * Le son et l'image ne passent jamais par le serveur (WebRTC).
+ */
+@Injectable()
+export class CallService {
+  private readonly rooms = new Map<string, CallRoom>();
+
+  /** Le direct de la conversation `key` (vide s'il n'y en a pas). */
+  room(key: string): CallRoom {
+    let room = this.rooms.get(key);
+    if (!room) {
+      room = new CallRoom();
+      this.rooms.set(key, room);
+    }
+    return room;
+  }
+
+  /** Oublie un direct terminé, pour ne rien garder inutilement en mémoire. */
+  release(key: string) {
+    if (this.rooms.get(key)?.isEmpty()) this.rooms.delete(key);
   }
 }

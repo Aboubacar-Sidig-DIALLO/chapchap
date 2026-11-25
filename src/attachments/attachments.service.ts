@@ -1,4 +1,12 @@
-import { Injectable } from '@nestjs/common';
+import { rm, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  Injectable,
+  Logger,
+  type OnModuleDestroy,
+  type OnModuleInit,
+} from '@nestjs/common';
+import { CLEANUP_INTERVAL_MS, MESSAGE_TTL_MS } from '../chat/chat.constants';
 import type {
   Attachment,
   ImageMetadata,
@@ -8,6 +16,7 @@ import {
   INLINE_TYPES,
   MAX_VOICE_DURATION_MS,
   MAX_WAVEFORM_BARS,
+  UPLOAD_DIR,
 } from './attachments.constants';
 
 const MAX_NAME_LENGTH = 255;
@@ -18,6 +27,8 @@ interface StoredAttachment {
   attachment: Attachment;
   /** Emplacement du fichier sur le disque. */
   path: string;
+  /** Horodatage (ms) à partir duquel le fichier est supprimé. */
+  expiresAt: number;
 }
 
 /** Champs texte envoyés avec le fichier (formulaire multipart). */
@@ -111,13 +122,37 @@ function parseImageMetadata(
   return { width, height, color: color.toLowerCase() };
 }
 
+/** Les fichiers enregistrés portent un UUID pour nom (voir le contrôleur) : rien d'autre n'est supprimé. */
+const STORED_FILE_NAME =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 /**
- * Registre des pièces jointes. Les fichiers sont sur disque, les métadonnées
- * en mémoire (comme l'historique, elles sont perdues au redémarrage).
+ * Registre des pièces jointes, éphémère comme les messages : les métadonnées
+ * sont en mémoire, les fichiers sur disque le temps de leur durée de vie
+ * (une heure après l'envoi du message), puis supprimés.
  */
 @Injectable()
-export class AttachmentsService {
+export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger('Attachments');
   private readonly attachments = new Map<string, StoredAttachment>();
+  private cleanupTimer?: NodeJS.Timeout;
+
+  /**
+   * Au démarrage, les métadonnées en mémoire ont disparu : les fichiers
+   * restés sur disque (arrêt du serveur) sont orphelins et supprimés.
+   */
+  async onModuleInit() {
+    await this.removeOrphanFiles();
+    this.cleanupTimer = setInterval(
+      () => void this.removeExpired(),
+      CLEANUP_INTERVAL_MS,
+    );
+    this.cleanupTimer.unref();
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.cleanupTimer);
+  }
 
   register(file: Express.Multer.File, fields: UploadFields = {}): Attachment {
     const id = file.filename;
@@ -135,15 +170,22 @@ export class AttachmentsService {
       ...(image && { image }),
     };
 
-    this.attachments.set(id, { attachment, path: file.path });
+    // Un fichier jamais envoyé dans un message disparaît lui aussi au bout d'une heure.
+    this.attachments.set(id, {
+      attachment,
+      path: file.path,
+      expiresAt: Date.now() + MESSAGE_TTL_MS,
+    });
     return attachment;
   }
 
+  /** La pièce jointe, tant qu'elle n'a pas expiré. */
   find(id: string): StoredAttachment | undefined {
-    return this.attachments.get(id);
+    const stored = this.attachments.get(id);
+    return stored && stored.expiresAt > Date.now() ? stored : undefined;
   }
 
-  /** Résout les ids envoyés par le client ; `null` si l'un d'eux est inconnu. */
+  /** Résout les ids envoyés par le client ; `null` si l'un d'eux est inconnu ou expiré. */
   resolve(ids: unknown[]): Attachment[] | null {
     const attachments: Attachment[] = [];
 
@@ -154,5 +196,40 @@ export class AttachmentsService {
     }
 
     return attachments;
+  }
+
+  /** Aligne la durée de vie des fichiers sur celle du message qui les contient. */
+  keepUntil(attachments: Attachment[], expiresAt: string) {
+    const until = Date.parse(expiresAt);
+    for (const { id } of attachments) {
+      const stored = this.attachments.get(id);
+      if (stored) stored.expiresAt = Math.max(stored.expiresAt, until);
+    }
+  }
+
+  /** Supprime les pièces jointes expirées : métadonnées et fichiers. */
+  async removeExpired(now = Date.now()) {
+    const expired = [...this.attachments].filter(
+      ([, stored]) => stored.expiresAt <= now,
+    );
+    for (const [id, stored] of expired) {
+      this.attachments.delete(id);
+      await rm(stored.path, { force: true }).catch((error: unknown) =>
+        this.logger.error(`Suppression impossible de ${id} : ${String(error)}`),
+      );
+    }
+  }
+
+  private async removeOrphanFiles() {
+    const names = await readdir(UPLOAD_DIR).catch(() => [] as string[]);
+    const orphans = names.filter((name) => STORED_FILE_NAME.test(name));
+    await Promise.all(
+      orphans.map((name) => rm(join(UPLOAD_DIR, name), { force: true })),
+    );
+    if (orphans.length > 0) {
+      this.logger.log(
+        `${orphans.length} fichier(s) d'une session précédente supprimé(s)`,
+      );
+    }
   }
 }

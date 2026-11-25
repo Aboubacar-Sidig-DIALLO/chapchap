@@ -1,0 +1,140 @@
+// Schéma de la base PostgreSQL.
+// Les modèles User, Session, Account et Verification sont ceux qu'attend Better Auth (`src/auth/auth.ts`) :
+// ne pas renommer leurs champs sans adapter sa configuration.
+// Après une modification : `pnpm db:migrate` (crée la migration et regénère le client).
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Un compte : un nom (ou pseudo) et une adresse email unique.
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  /// Dernière fois que l'utilisateur a quitté l'application (« hors ligne depuis… »), visible de ses amis.
+  lastSeenAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  // Relations sociales (voir plus bas)
+  friendshipsAsA   Friendship[]  @relation("FriendshipUserA")
+  friendshipsAsB   Friendship[]  @relation("FriendshipUserB")
+  groupMemberships GroupMember[]
+  createdGroups    Group[]
+
+  @@map("user")
+}
+
+/// Une session ouverte sur un appareil ; son jeton est porté par un cookie httpOnly.
+model Session {
+  id        String   @id
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+/// Moyen de connexion rattaché à un compte (fournisseur OAuth, mot de passe…).
+/// Inutilisé pour la connexion par email seul, mais requis par Better Auth.
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+/// Jetons temporaires de Better Auth (vérification d'email, etc.). Inutilisé pour l'instant.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+// ─── Relations sociales ─────────────────────────────────────────────────────
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+}
+
+/// Lien d'amitié entre deux utilisateurs : une demande, puis une amitié une fois acceptée.
+/// La paire est rangée dans l'ordre (userAId < userBId) : un seul lien possible par paire,
+/// garanti par la base, quel que soit celui qui a fait la demande.
+model Friendship {
+  id          String           @id @default(cuid())
+  userAId     String
+  userBId     String
+  /// Auteur de la demande (userAId ou userBId).
+  requesterId String
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  userA       User             @relation("FriendshipUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB       User             @relation("FriendshipUserB", fields: [userBId], references: [id], onDelete: Cascade)
+
+  @@unique([userAId, userBId])
+  @@index([userBId])
+  @@map("friendship")
+}
+
+/// Groupe d'amis, créé par l'un d'eux.
+model Group {
+  id          String        @id @default(cuid())
+  name        String
+  createdById String?
+  createdBy   User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime      @default(now())
+  members     GroupMember[]
+
+  @@map("friend_group")
+}
+
+/// Lien entre un utilisateur et un groupe d'amis.
+model GroupMember {
+  groupId  String
+  userId   String
+  joinedAt DateTime @default(now())
+  group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+  @@map("group_member")
+}

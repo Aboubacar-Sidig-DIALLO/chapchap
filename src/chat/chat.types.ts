@@ -5,6 +5,8 @@ import type {
   CallSignal,
   CallSummary,
 } from '../call/call.types';
+import type { AuthSocketData } from '../auth/socket-auth';
+import type { Conversation } from '../social/conversation-access.service';
 import type { ReactionEmoji } from './chat.constants';
 
 export interface ChatUser {
@@ -22,6 +24,8 @@ export interface ChatMessage {
   attachments: Attachment[];
   /** Date ISO 8601, fixée par le serveur. */
   createdAt: string;
+  /** Date ISO 8601 à laquelle le message disparaît, partout (une heure après l'envoi). */
+  expiresAt: string;
   /** Participants ayant écouté le message vocal (hors auteur). */
   listenedBy: ChatUser[];
   /** Jusqu'où chaque participant a écouté le vocal, même partiellement. */
@@ -99,7 +103,17 @@ export interface ListeningEvent {
 }
 
 /** Contrat Socket.io — à garder synchronisé avec le client (`lib/socket.ts`). */
+/** Ce que le client sait de la conversation ouverte. */
+export interface ConversationInfo {
+  type: Conversation['type'];
+  title: string;
+}
+
 export interface ServerToClientEvents {
+  /** Conversation ouverte (accès vérifié), juste avant son historique. */
+  'conversation:ready': (conversation: ConversationInfo) => void;
+  /** Accès retiré (ami retiré, groupe quitté) : la connexion va être fermée. */
+  'conversation:closed': () => void;
   'chat:history': (messages: ChatMessage[]) => void;
   'message:new': (message: ChatMessage) => void;
   'users:online': (users: ChatUser[]) => void;
@@ -123,6 +137,7 @@ export interface ServerToClientEvents {
   'call:reaction': (reaction: CallReaction) => void;
 }
 
-export interface SocketData {
-  user: ChatUser;
+/** Données d'une connexion de chat : l'utilisateur (session) et sa conversation (accès vérifié). */
+export interface SocketData extends AuthSocketData {
+  conversation: Conversation;
 }

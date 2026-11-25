@@ -1,10 +1,12 @@
 import { Controller, Get, Sse } from '@nestjs/common';
+import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
 import { Observable } from 'rxjs/internal/Observable';
 import { interval } from 'rxjs/internal/observable/interval';
 import { map } from 'rxjs/internal/operators/map';
 import { AppService } from './app.service';
 
 @Controller()
+@AllowAnonymous()
 export class AppController {
   constructor(private readonly appService: AppService) {}
 

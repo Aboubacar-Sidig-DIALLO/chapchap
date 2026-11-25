@@ -1,20 +1,36 @@
+import type { OnModuleDestroy } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
+import type { Subscription } from 'rxjs';
 import type { Server, Socket } from 'socket.io';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../attachments/attachments.constants';
 import { AttachmentsService } from '../attachments/attachments.service';
+import { authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
+import {
+  ConversationAccessService,
+  parseConversationRef,
+} from '../social/conversation-access.service';
+import {
+  type AccessRevoked,
+  SocialEvents,
+} from '../social/social-events.service';
+import { PresenceService } from '../social/presence.service';
+import { SocialGateway } from '../social/social.gateway';
+import { toPublicUser } from '../social/social.utils';
 import { isReactionEmoji } from './chat.constants';
 import { ChatService } from './chat.service';
+import type { ConversationStore } from './conversation-store';
 import type {
-  ChatUser,
+  ChatMessage,
   SendMessageAck,
   SendMessagePayload,
   ServerToClientEvents,
@@ -22,7 +38,6 @@ import type {
   UserActivity,
 } from './chat.types';
 
-const MAX_NAME_LENGTH = 32;
 const MAX_MESSAGE_LENGTH = 2000;
 
 type ChatServer = Server<
@@ -55,57 +70,86 @@ function isPercent(value: unknown): value is number {
   );
 }
 
-function parseUser(auth: unknown): ChatUser | null {
-  const { id, name } = (auth ?? {}) as Partial<Record<keyof ChatUser, unknown>>;
-  if (typeof id !== 'string' || typeof name !== 'string') return null;
-
-  const trimmedName = name.trim().slice(0, MAX_NAME_LENGTH);
-  if (!id || !trimmedName) return null;
-
-  return { id, name: trimmedName };
-}
-
-@WebSocketGateway({ cors: { origin: CLIENT_ORIGIN } })
-export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
+/**
+ * Discussions en temps réel : le salon, les conversations entre amis et celles
+ * des groupes. Chaque connexion ouvre une seule conversation (sa « salle »),
+ * et tout ce qui s'y passe reste dans cette salle.
+ */
+@WebSocketGateway({ cors: { origin: CLIENT_ORIGIN, credentials: true } })
+export class ChatGateway
+  implements
+    OnGatewayInit,
+    OnGatewayConnection,
+    OnGatewayDisconnect,
+    OnModuleDestroy
+{
   @WebSocketServer()
   private readonly server: ChatServer;
+  private accessRevokedSubscription?: Subscription;
 
   constructor(
     private readonly chatService: ChatService,
     private readonly attachmentsService: AttachmentsService,
+    private readonly conversationAccess: ConversationAccessService,
+    private readonly socialEvents: SocialEvents,
+    private readonly socialGateway: SocialGateway,
+    private readonly presence: PresenceService,
   ) {}
 
+  /**
+   * Chat et direct partagent ce serveur. Une connexion n'est acceptée
+   * qu'avec une session valide, puis un accès vérifié à la conversation demandée.
+   */
+  afterInit(server: ChatServer) {
+    server.use(authenticateSocket);
+    server.use((socket, next) => this.authorizeConversation(socket, next));
+
+    this.accessRevokedSubscription = this.socialEvents.accessRevoked$.subscribe(
+      (event) => void this.closeConversation(event),
+    );
+  }
+
+  onModuleDestroy() {
+    this.accessRevokedSubscription?.unsubscribe();
+  }
+
+  /** `client.data` est rempli par les middlewares : utilisateur et conversation sont garantis. */
   handleConnection(client: ChatSocket) {
-    const user = parseUser(client.handshake.auth);
-    if (!user) {
-      client.disconnect(true);
-      return;
-    }
+    const { user, conversation } = client.data;
+    void client.join(conversation.key);
+    this.chatService.addConnection(client.id, user, conversation.key);
+    // Être dans une conversation, c'est aussi être en ligne pour ses amis.
+    this.presence.connected(user.id);
 
-    client.data.user = user;
-    this.chatService.addConnection(client.id, user);
-
-    client.emit('chat:history', this.chatService.getHistory());
-    client.emit('receipts:update', this.chatService.getReceipts());
-    this.broadcastOnlineUsers();
+    const store = this.chatService.conversation(conversation.key);
+    client.emit('conversation:ready', {
+      type: conversation.type,
+      title: conversation.title,
+    });
+    client.emit('chat:history', store.getHistory());
+    client.emit('receipts:update', store.getReceipts());
+    this.broadcastOnlineUsers(conversation.key);
   }
 
   handleDisconnect(client: ChatSocket) {
-    const { user } = client.data;
-    if (!user) return;
+    const { user, conversation } = client.data;
+    if (!user || !conversation) return;
 
     this.chatService.removeConnection(client.id);
-    client.broadcast.emit('activity', { user, activity: null });
-    client.broadcast.emit('voice:listening', { user, messageId: null });
-    this.broadcastOnlineUsers();
+    this.presence.disconnected(user.id);
+    const room = client.to(conversation.key);
+    room.emit('activity', { user, activity: null });
+    room.emit('voice:listening', { user, messageId: null });
+    this.broadcastOnlineUsers(conversation.key);
   }
 
   /** La valeur retournée est transmise au client comme accusé de réception. */
   @SubscribeMessage('message:send')
-  handleSendMessage(
+  async handleSendMessage(
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() payload: SendMessagePayload,
-  ): SendMessageAck {
+  ): Promise<SendMessageAck> {
+    const { user, conversation } = client.data;
     const content =
       typeof payload?.content === 'string' ? payload.content.trim() : '';
     const attachmentIds: unknown[] = Array.isArray(payload?.attachmentIds)
@@ -124,21 +168,35 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const attachments = this.attachmentsService.resolve(attachmentIds);
     if (!attachments) {
-      return { ok: false, error: 'Pièce jointe introuvable' };
+      return { ok: false, error: 'Pièce jointe introuvable ou expirée' };
     }
     if (!content && attachments.length === 0) {
       return { ok: false, error: 'Message vide' };
     }
 
-    const { message, isNew } = this.chatService.addMessage({
-      id: payload.id,
-      author: client.data.user,
-      content,
-      attachments,
-      createdAt: new Date().toISOString(),
-    });
+    // L'amitié ou l'appartenance au groupe a pu prendre fin depuis la connexion.
+    if (!(await this.conversationAccess.canAccess(user.id, conversation))) {
+      return {
+        ok: false,
+        error: "Vous n'avez plus accès à cette conversation",
+      };
+    }
 
-    if (isNew) client.broadcast.emit('message:new', message);
+    const { message, isNew } = this.chatService
+      .conversation(conversation.key)
+      .addMessage({
+        id: payload.id,
+        author: user,
+        content,
+        attachments,
+        createdAt: new Date().toISOString(),
+      });
+
+    if (isNew) {
+      this.attachmentsService.keepUntil(attachments, message.expiresAt);
+      client.to(conversation.key).emit('message:new', message);
+      this.notifyMembers(client, message);
+    }
 
     return { ok: true, message };
   }
@@ -149,7 +207,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() activity: unknown,
   ) {
-    client.broadcast.emit('activity', {
+    client.to(client.data.conversation.key).emit('activity', {
       user: client.data.user,
       activity: isUserActivity(activity) ? activity : null,
     });
@@ -161,12 +219,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() messageId: unknown,
   ) {
-    const { user } = client.data;
+    const { user, conversation } = client.data;
     if (
       typeof messageId === 'string' &&
-      this.chatService.markListened(messageId, user)
+      this.store(client).markListened(messageId, user)
     ) {
-      this.server.emit('voice:listened', { messageId, user });
+      this.server
+        .to(conversation.key)
+        .emit('voice:listened', { messageId, user });
     }
   }
 
@@ -179,12 +239,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() messageId: unknown,
   ) {
-    const { user } = client.data;
+    const { user, conversation } = client.data;
     const isValid =
       typeof messageId === 'string' &&
-      this.chatService.canListen(messageId, user);
+      this.store(client).canListen(messageId, user);
 
-    client.broadcast.emit('voice:listening', {
+    client.to(conversation.key).emit('voice:listening', {
       user,
       messageId: isValid ? messageId : null,
     });
@@ -197,13 +257,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: unknown,
   ) {
     const { messageId, percent } = (payload ?? {}) as Record<string, unknown>;
-    const { user } = client.data;
+    const { user, conversation } = client.data;
     if (
       typeof messageId === 'string' &&
       isPercent(percent) &&
-      this.chatService.updateListenProgress(messageId, user, percent)
+      this.store(client).updateListenProgress(messageId, user, percent)
     ) {
-      this.server.emit('voice:progress', { messageId, user, percent });
+      this.server
+        .to(conversation.key)
+        .emit('voice:progress', { messageId, user, percent });
     }
   }
 
@@ -217,13 +279,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (typeof messageId !== 'string') return;
     if (emoji !== null && !isReactionEmoji(emoji)) return;
 
-    const reactions = this.chatService.setReaction(
+    const reactions = this.store(client).setReaction(
       messageId,
       client.data.user,
       emoji,
     );
     if (reactions) {
-      this.server.emit('message:reactions', { messageId, reactions });
+      this.server
+        .to(client.data.conversation.key)
+        .emit('message:reactions', { messageId, reactions });
     }
   }
 
@@ -245,16 +309,99 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (isSeq(seq)) this.updateReceipt(client, { readSeq: seq });
   }
 
-  /** Diffusé à tous, y compris l'émetteur (synchronise ses autres onglets). */
-  private updateReceipt(
-    client: ChatSocket,
-    update: Parameters<ChatService['updateReceipt']>[1],
+  /**
+   * Middleware : la conversation demandée (`handshake.auth.conversation`)
+   * doit être accessible à l'utilisateur, sinon la connexion est refusée.
+   */
+  private authorizeConversation(
+    socket: ChatSocket,
+    next: (error?: Error) => void,
   ) {
-    const receipt = this.chatService.updateReceipt(client.data.user, update);
-    if (receipt) this.server.emit('receipts:update', [receipt]);
+    const auth = socket.handshake.auth as Record<string, unknown> | undefined;
+    const ref = parseConversationRef(auth?.conversation);
+    if (!ref) return next(new Error('BAD_REQUEST'));
+
+    this.conversationAccess
+      .open(socket.data.user.id, ref)
+      .then((conversation) => {
+        if (!conversation) return next(new Error('FORBIDDEN'));
+        socket.data.conversation = conversation;
+        next();
+      })
+      .catch(() => next(new Error('FORBIDDEN')));
   }
 
-  private broadcastOnlineUsers() {
-    this.server.emit('users:online', this.chatService.getOnlineUsers());
+  /** La conversation ouverte par cette connexion. */
+  private store(client: ChatSocket) {
+    return this.chatService.conversation(client.data.conversation.key);
+  }
+
+  /** Diffusé à toute la conversation, y compris l'émetteur (synchronise ses autres onglets). */
+  private updateReceipt(
+    client: ChatSocket,
+    update: Parameters<ConversationStore['updateReceipt']>[1],
+  ) {
+    const receipt = this.store(client).updateReceipt(client.data.user, update);
+    if (receipt) {
+      this.server
+        .to(client.data.conversation.key)
+        .emit('receipts:update', [receipt]);
+    }
+  }
+
+  /**
+   * Signale le nouveau message aux autres membres d'une conversation privée ou
+   * de groupe, sur leur accueil (sans son contenu). Le salon n'en déclenche pas.
+   */
+  private notifyMembers(client: ChatSocket, message: ChatMessage) {
+    const { user, conversation } = client.data;
+    const recipients = (conversation.memberIds ?? []).filter(
+      (id) => id !== user.id,
+    );
+    const from = toPublicUser(message.author);
+
+    if (conversation.type === 'direct') {
+      this.socialGateway.notifyMessage(recipients, {
+        conversation: { type: 'direct', userId: user.id },
+        from,
+      });
+    } else if (conversation.type === 'group' && conversation.groupId) {
+      this.socialGateway.notifyMessage(recipients, {
+        conversation: {
+          type: 'group',
+          groupId: conversation.groupId,
+          groupName: conversation.title,
+        },
+        from,
+      });
+    }
+  }
+
+  /**
+   * Ferme une conversation pour ceux qui n'y ont plus accès. Quand plus aucun
+   * de ses membres n'y a droit (amitié rompue), ses messages sont effacés.
+   */
+  private async closeConversation({ conversationKey, userIds }: AccessRevoked) {
+    const sockets = await this.server.in(conversationKey).fetchSockets();
+    for (const socket of sockets) {
+      if (userIds.includes(socket.data.user.id)) {
+        socket.emit('conversation:closed');
+        socket.disconnect(true);
+      }
+    }
+
+    const members = sockets[0]?.data.conversation.memberIds;
+    const everyoneRevoked =
+      conversationKey.startsWith('direct:') ||
+      (members !== undefined &&
+        members !== null &&
+        members.every((id) => userIds.includes(id)));
+    if (everyoneRevoked) this.chatService.deleteConversation(conversationKey);
+  }
+
+  private broadcastOnlineUsers(conversationKey: string) {
+    this.server
+      .to(conversationKey)
+      .emit('users:online', this.chatService.getOnlineUsers(conversationKey));
   }
 }

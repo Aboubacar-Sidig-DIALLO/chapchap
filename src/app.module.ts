@@ -1,11 +1,25 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '@thallesp/nestjs-better-auth';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { auth } from './auth/auth';
+import { setClientIp } from './auth/client-ip';
 import { CallModule } from './call/call.module';
 import { ChatModule } from './chat/chat.module';
+import { DatabaseModule } from './database/database.module';
+import { SocialModule } from './social/social.module';
 
 @Module({
-  imports: [ChatModule, CallModule],
+  imports: [
+    // Monte Better Auth sur `/api/auth/*` et protège par défaut toutes les
+    // routes HTTP : une route publique se déclare avec `@AllowAnonymous()`.
+    // `middleware` passe l'IP du client à Better Auth avant chaque requête.
+    AuthModule.forRoot({ auth, middleware: setClientIp }),
+    DatabaseModule,
+    SocialModule,
+    ChatModule,
+    CallModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })
