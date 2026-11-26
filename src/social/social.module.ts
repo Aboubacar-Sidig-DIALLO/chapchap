@@ -3,6 +3,8 @@ import { AccountEventsListener } from './account-events.listener';
 import { ConversationAccessService } from './conversation-access.service';
 import { FriendsController } from './friends.controller';
 import { FriendsService } from './friends.service';
+import { GroupPhotosController } from './group-photos.controller';
+import { GroupPhotosService } from './group-photos.service';
 import { GroupsController } from './groups.controller';
 import { GroupsService } from './groups.service';
 import { OngoingCallsService } from './ongoing-calls.service';
@@ -16,11 +18,12 @@ import { SocialGateway } from './social.gateway';
  * du module d'appel les appels en cours, pour les annoncer.
  */
 @Module({
-  controllers: [FriendsController, GroupsController],
+  controllers: [FriendsController, GroupsController, GroupPhotosController],
   providers: [
     AccountEventsListener,
     FriendsService,
     GroupsService,
+    GroupPhotosService,
     SocialGateway,
     SocialEvents,
     ConversationAccessService,

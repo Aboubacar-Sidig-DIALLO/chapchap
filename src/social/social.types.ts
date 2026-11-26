@@ -62,8 +62,13 @@ export interface FriendsOverview {
 export interface GroupSummary {
   id: string;
   name: string;
+  /** Adresse de la photo, relative à l'API ; `null` sans photo. */
+  photoUrl: string | null;
+  /** Celui qui administre le groupe (nom, photo, membres) ; au départ, son créateur. */
+  ownerId: string | null;
   /** Date ISO 8601. */
   createdAt: string;
+  /** Par ordre d'arrivée. */
   members: PublicUser[];
   /** Appel en cours dans le groupe, visible sans y entrer. */
   call: OngoingCall | null;

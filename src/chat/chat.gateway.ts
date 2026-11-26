@@ -17,8 +17,10 @@ import { accountEvents } from '../auth/account-events';
 import { authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
 import {
+  type Conversation,
   ConversationAccessService,
   directKeyMembers,
+  groupKey,
   parseConversationRef,
 } from '../social/conversation-access.service';
 import {
@@ -34,6 +36,7 @@ import { ChatService } from './chat.service';
 import type { ConversationStore } from './conversation-store';
 import type {
   ChatMessage,
+  ConversationInfo,
   SendMessageAck,
   SendMessagePayload,
   ServerToClientEvents,
@@ -55,6 +58,12 @@ type ChatSocket = Socket<
   Record<string, never>,
   SocketData
 >;
+
+/** Ce que le client sait de sa conversation. */
+function conversationInfo(conversation: Conversation): ConversationInfo {
+  const { type, title, photoUrl } = conversation;
+  return { type, title, photoUrl };
+}
 
 function isUserActivity(value: unknown): value is UserActivity {
   return value === 'typing' || value === 'recording';
@@ -112,6 +121,9 @@ export class ChatGateway
       this.socialEvents.accessRevoked$.subscribe(
         (event) => void this.closeConversation(event),
       ),
+      this.socialEvents.groupUpdated$.subscribe(
+        (groupId) => void this.refreshGroupConversation(groupId),
+      ),
       this.presence.changes$.subscribe((change) =>
         this.relayFriendPresence(change),
       ),
@@ -136,10 +148,7 @@ export class ChatGateway
     this.presence.connected(user.id);
 
     const store = this.chatService.conversation(conversation.key);
-    client.emit('conversation:ready', {
-      type: conversation.type,
-      title: conversation.title,
-    });
+    client.emit('conversation:ready', conversationInfo(conversation));
     client.emit('chat:history', store.getHistory());
     client.emit('receipts:update', store.getReceipts());
     this.broadcastOnlineUsers(conversation.key);
@@ -410,6 +419,23 @@ export class ChatGateway
       conversationKey.startsWith('direct:') ||
       (members?.every((id) => userIds.includes(id)) ?? false);
     if (everyoneRevoked) this.chatService.deleteConversation(conversationKey);
+  }
+
+  /**
+   * Le groupe a changé : ses connexions ouvertes reprennent son nom, sa photo
+   * et ses membres (à qui sont signalés les nouveaux messages).
+   */
+  private async refreshGroupConversation(groupId: string) {
+    const key = groupKey(groupId);
+    const sockets = await this.server.in(key).fetchSockets();
+    if (sockets.length === 0) return;
+
+    const conversation = await this.conversationAccess.group(groupId);
+    if (!conversation) return;
+    for (const socket of sockets) socket.data.conversation = conversation;
+    this.server
+      .to(key)
+      .emit('conversation:updated', conversationInfo(conversation));
   }
 
   /** Conversation privée : où en est l'ami (en ligne, hors ligne depuis…). */

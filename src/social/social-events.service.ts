@@ -14,11 +14,22 @@ export interface AccessRevoked {
 @Injectable()
 export class SocialEvents {
   private readonly accessRevokedSubject = new Subject<AccessRevoked>();
+  private readonly groupUpdatedSubject = new Subject<string>();
 
   /** À écouter pour fermer les conversations devenues interdites. */
   readonly accessRevoked$ = this.accessRevokedSubject.asObservable();
 
+  /**
+   * Nom, photo ou membres d'un groupe (son identifiant) ont changé : ses
+   * conversations ouvertes se mettent à jour.
+   */
+  readonly groupUpdated$ = this.groupUpdatedSubject.asObservable();
+
   revokeAccess(event: AccessRevoked) {
     this.accessRevokedSubject.next(event);
+  }
+
+  groupUpdated(groupId: string) {
+    this.groupUpdatedSubject.next(groupId);
   }
 }

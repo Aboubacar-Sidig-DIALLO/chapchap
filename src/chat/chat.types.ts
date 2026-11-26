@@ -108,11 +108,15 @@ export interface ListeningEvent {
 export interface ConversationInfo {
   type: Conversation['type'];
   title: string;
+  /** Photo du groupe (adresse relative à l'API) ; `null` sinon. */
+  photoUrl: string | null;
 }
 
 export interface ServerToClientEvents {
   /** Conversation ouverte (accès vérifié), juste avant son historique. */
   'conversation:ready': (conversation: ConversationInfo) => void;
+  /** Le groupe a changé de nom ou de photo. */
+  'conversation:updated': (conversation: ConversationInfo) => void;
   /** Accès retiré (ami retiré, groupe quitté) : la connexion va être fermée. */
   'conversation:closed': () => void;
   /** Toutes les sessions de l'utilisateur ont été fermées : la connexion va se fermer. */

@@ -4,6 +4,7 @@ import {
   FriendshipStatus,
   type PrismaClient,
 } from '../generated/prisma/client';
+import { GroupPhotosService } from './group-photos.service';
 import { pairOf } from './social.utils';
 
 /** Conversation demandée par le client (il ne fabrique jamais lui-même la clé). */
@@ -17,6 +18,8 @@ export interface Conversation {
   type: ConversationRef['type'];
   /** Nom affiché : l'ami ou le groupe. */
   title: string;
+  /** Photo du groupe (adresse relative à l'API) ; `null` pour un ami ou un groupe sans photo. */
+  photoUrl: string | null;
   /** Membres : l'ami et soi, ou les membres du groupe. */
   memberIds: string[];
   /** Ami concerné (conversation `direct`). */
@@ -89,26 +92,41 @@ export class ConversationAccessService {
           key: directKey(userId, ref.userId),
           type: 'direct',
           title: friend.name,
+          photoUrl: null,
           memberIds: [userId, ref.userId],
           friendId: ref.userId,
         };
       }
 
       case 'group': {
-        const group = await this.prisma.group.findFirst({
-          where: { id: ref.groupId, members: { some: { userId } } },
-          select: { name: true, members: { select: { userId: true } } },
-        });
-        if (!group) return null;
-        return {
-          key: groupKey(ref.groupId),
-          type: 'group',
-          title: group.name,
-          memberIds: group.members.map((member) => member.userId),
-          groupId: ref.groupId,
-        };
+        const conversation = await this.group(ref.groupId);
+        return conversation?.memberIds.includes(userId) ? conversation : null;
       }
     }
+  }
+
+  /**
+   * La conversation d'un groupe, telle qu'elle est maintenant (nom, photo,
+   * membres), sans vérifier d'accès ; `null` si le groupe n'existe plus.
+   */
+  async group(groupId: string): Promise<Conversation | null> {
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      select: {
+        name: true,
+        photo: true,
+        members: { select: { userId: true } },
+      },
+    });
+    if (!group) return null;
+    return {
+      key: groupKey(groupId),
+      type: 'group',
+      title: group.name,
+      photoUrl: GroupPhotosService.url(group.photo),
+      memberIds: group.members.map((member) => member.userId),
+      groupId,
+    };
   }
 
   /** Revérifie l'accès (avant chaque envoi) : une amitié ou une appartenance a pu prendre fin. */

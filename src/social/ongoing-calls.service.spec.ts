@@ -8,6 +8,7 @@ const group: Conversation = {
   key: 'group:g1',
   type: 'group',
   title: 'Café',
+  photoUrl: null,
   memberIds: ['ana', 'bob', 'cleo'],
   groupId: 'g1',
 };

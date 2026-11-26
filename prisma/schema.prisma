@@ -31,7 +31,7 @@ model User {
   friendshipsAsA   Friendship[]  @relation("FriendshipUserA")
   friendshipsAsB   Friendship[]  @relation("FriendshipUserB")
   groupMemberships GroupMember[]
-  createdGroups    Group[]
+  ownedGroups      Group[]
 
   @@map("user")
 }
@@ -114,14 +114,18 @@ model Friendship {
   @@map("friendship")
 }
 
-/// Groupe d'amis, créé par l'un d'eux.
+/// Groupe d'amis. Son propriétaire (au départ, celui qui l'a créé) l'administre :
+/// nom, photo, membres. S'il le quitte, le membre le plus ancien prend le relais.
 model Group {
-  id          String        @id @default(cuid())
-  name        String
-  createdById String?
-  createdBy   User?         @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime      @default(now())
-  members     GroupMember[]
+  id        String        @id @default(cuid())
+  name      String
+  /// Nom du fichier de la photo dans le stockage des photos de groupe (voir `GroupPhotosService`).
+  photo     String?
+  /// Toujours un membre du groupe ; `null` seulement le temps de désigner un successeur.
+  ownerId   String?
+  owner     User?         @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt DateTime      @default(now())
+  members   GroupMember[]
 
   @@map("friend_group")
 }
