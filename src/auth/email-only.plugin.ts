@@ -8,8 +8,8 @@ import {
 import { deleteSessionCookie, setSessionCookie } from 'better-auth/cookies';
 import { z } from 'zod';
 import { accountEvents } from './account-events';
-import { findAccountLinks } from './account-links';
 import { AUTH_ERROR, AUTH_RATE_LIMIT_PER_MINUTE } from './auth.constants';
+import { isAdmin } from './roles';
 
 const SIGN_UP_PATH = '/sign-up/email-only';
 const SIGN_IN_PATH = '/sign-in/email-only';
@@ -54,6 +54,7 @@ async function signOutEverywhere(ctx: GenericEndpointContext, userId: string) {
  * ⚠️ Connaître l'email d'un compte suffit pour s'y connecter. Ce choix
  * privilégie la simplicité ; pour vérifier la possession de l'adresse,
  * remplacer ce plugin par `emailOTP` ou `magicLink` de Better Auth.
+ * Les administrateurs en sont exclus : ils se connectent avec un mot de passe.
  *
  * Les comptes, sessions et cookies restent entièrement gérés par Better Auth
  * (hooks, durée de session, cookie httpOnly, protection CSRF, limitation de débit).
@@ -114,6 +115,13 @@ export const emailOnly = () =>
           }
 
           const { user } = found;
+          // Un administrateur se connecte avec son mot de passe (`/sign-in/email`).
+          if (isAdmin(user)) {
+            throw new APIError('BAD_REQUEST', {
+              code: AUTH_ERROR.PASSWORD_REQUIRED,
+              message: 'Ce compte se connecte avec un mot de passe',
+            });
+          }
           const session = await internalAdapter.createSession(user.id);
           await setSessionCookie(ctx, { session, user });
 
@@ -187,11 +195,10 @@ export const emailOnly = () =>
             });
           }
 
-          // Lu avant la suppression, qui efface ces liens en cascade.
-          const links = await findAccountLinks(user.id);
+          // Sessions supprimées en cascade ; connexions fermées et proches
+          // prévenus par `databaseHooks.user.delete` (`user-delete-hooks.ts`).
           await ctx.context.internalAdapter.deleteUser(user.id);
-          await signOutEverywhere(ctx, user.id);
-          accountEvents.deleted$.next({ userId: user.id, ...links });
+          deleteSessionCookie(ctx);
 
           return ctx.json({ success: true });
         },

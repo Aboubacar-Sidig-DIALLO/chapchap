@@ -33,6 +33,16 @@ export class PresenceService implements OnModuleDestroy {
     this.pendingOffline.forEach((timer) => clearTimeout(timer));
   }
 
+  /** Nombre d'utilisateurs ayant l'application ouverte. */
+  onlineCount(): number {
+    return this.connections.size;
+  }
+
+  /** Utilisateurs ayant l'application ouverte. */
+  onlineIds(): string[] {
+    return [...this.connections.keys()];
+  }
+
   isOnline(userId: string): boolean {
     return (this.connections.get(userId) ?? 0) > 0;
   }

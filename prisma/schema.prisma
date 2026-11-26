@@ -22,6 +22,13 @@ model User {
   image         String?
   /// Dernière fois que l'utilisateur a quitté l'application (« hors ligne depuis… »), visible de ses amis.
   lastSeenAt    DateTime?
+  /// Plugin Admin de Better Auth : `user` ou `admin` (accès à l'administration).
+  role          String?   @default("user")
+  /// Compte suspendu : plus aucune session ne peut s'ouvrir.
+  banned        Boolean?  @default(false)
+  banReason     String?
+  /// Fin de la suspension ; `null` : définitive.
+  banExpires    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   sessions      Session[]
@@ -47,6 +54,8 @@ model Session {
   updatedAt DateTime @updatedAt
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Session ouverte par un administrateur « en tant que » cet utilisateur : son identifiant.
+  impersonatedBy String?
 
   @@index([userId])
   @@map("session")
