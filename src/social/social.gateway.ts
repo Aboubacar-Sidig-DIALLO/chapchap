@@ -8,6 +8,7 @@ import {
 } from '@nestjs/websockets';
 import type { Subscription } from 'rxjs';
 import type { Namespace, Socket } from 'socket.io';
+import { accountEvents } from '../auth/account-events';
 import { type AuthSocketData, authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
 import type { Conversation } from './conversation-access.service';
@@ -25,6 +26,7 @@ import type {
   SocialNotice,
   SocialServerEvents,
 } from './social.types';
+import { userRoom } from './social.utils';
 
 type SocialNamespace = Namespace<
   Record<string, never>,
@@ -38,9 +40,6 @@ type SocialSocket = Socket<
   Record<string, never>,
   AuthSocketData
 >;
-
-/** Salle personnelle : tous les onglets et appareils connectés d'un utilisateur. */
-const userRoom = (userId: string) => `user:${userId}`;
 
 /**
  * Temps réel de l'accueil (espace `/social`, distinct des conversations).
@@ -63,8 +62,9 @@ export class SocialGateway
     OnGatewayDisconnect,
     OnModuleDestroy
 {
+  // `!` : assigné par Nest après la construction (`@WebSocketServer`).
   @WebSocketServer()
-  private readonly server: SocialNamespace;
+  private readonly server!: SocialNamespace;
   private readonly subscriptions: Subscription[] = [];
 
   constructor(
@@ -84,6 +84,9 @@ export class SocialGateway
       this.ongoingCalls.changes$.subscribe(
         (update) => void this.notifyCall(update),
       ),
+      accountEvents.signedOutEverywhere$.subscribe(({ userId }) =>
+        this.endSessions(userId),
+      ),
     );
   }
 
@@ -99,6 +102,12 @@ export class SocialGateway
 
   handleDisconnect(client: SocialSocket) {
     if (client.data.user) this.presence.disconnected(client.data.user.id);
+  }
+
+  /** Sessions fermées : prévient ses onglets, puis ferme leurs connexions. */
+  private endSessions(userId: string) {
+    this.server.to(userRoom(userId)).emit('session:ended');
+    this.server.in(userRoom(userId)).disconnectSockets(true);
   }
 
   /** Annonce une arrivée ou un départ aux seuls amis de l'utilisateur. */

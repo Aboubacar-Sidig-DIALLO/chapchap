@@ -53,6 +53,17 @@ export class FriendsService {
     private readonly ongoingCalls: OngoingCallsService,
   ) {}
 
+  /** Tous ceux qui ont un lien avec `userId` : amis et demandes en cours, dans les deux sens. */
+  async relatedUserIds(userId: string): Promise<string[]> {
+    const friendships = await this.prisma.friendship.findMany({
+      where: involving(userId),
+      select: { userAId: true, userBId: true },
+    });
+    return friendships.map((friendship) =>
+      friendship.userAId === userId ? friendship.userBId : friendship.userAId,
+    );
+  }
+
   /** Identifiants des amis de `userId` (demandes acceptées). */
   async friendIds(userId: string): Promise<string[]> {
     const friendships = await this.prisma.friendship.findMany({

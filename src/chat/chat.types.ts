@@ -114,6 +114,8 @@ export interface ServerToClientEvents {
   'conversation:ready': (conversation: ConversationInfo) => void;
   /** Accès retiré (ami retiré, groupe quitté) : la connexion va être fermée. */
   'conversation:closed': () => void;
+  /** Toutes les sessions de l'utilisateur ont été fermées : la connexion va se fermer. */
+  'session:ended': () => void;
   'chat:history': (messages: ChatMessage[]) => void;
   'message:new': (message: ChatMessage) => void;
   'users:online': (users: ChatUser[]) => void;

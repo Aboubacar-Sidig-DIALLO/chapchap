@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AccountEventsListener } from './account-events.listener';
 import { ConversationAccessService } from './conversation-access.service';
 import { FriendsController } from './friends.controller';
 import { FriendsService } from './friends.service';
@@ -17,6 +18,7 @@ import { SocialGateway } from './social.gateway';
 @Module({
   controllers: [FriendsController, GroupsController],
   providers: [
+    AccountEventsListener,
     FriendsService,
     GroupsService,
     SocialGateway,

@@ -13,6 +13,7 @@ import type { Subscription } from 'rxjs';
 import type { Server, Socket } from 'socket.io';
 import { MAX_ATTACHMENTS_PER_MESSAGE } from '../attachments/attachments.constants';
 import { AttachmentsService } from '../attachments/attachments.service';
+import { accountEvents } from '../auth/account-events';
 import { authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
 import {
@@ -25,7 +26,7 @@ import {
 } from '../social/social-events.service';
 import { PresenceService } from '../social/presence.service';
 import { SocialGateway } from '../social/social.gateway';
-import { toPublicUser } from '../social/social.utils';
+import { toPublicUser, userRoom } from '../social/social.utils';
 import { isReactionEmoji } from './chat.constants';
 import { ChatService } from './chat.service';
 import type { ConversationStore } from './conversation-store';
@@ -83,9 +84,10 @@ export class ChatGateway
     OnGatewayDisconnect,
     OnModuleDestroy
 {
+  // `!` : assigné par Nest après la construction (`@WebSocketServer`).
   @WebSocketServer()
-  private readonly server: ChatServer;
-  private accessRevokedSubscription?: Subscription;
+  private readonly server!: ChatServer;
+  private readonly subscriptions: Subscription[] = [];
 
   constructor(
     private readonly chatService: ChatService,
@@ -104,19 +106,26 @@ export class ChatGateway
     server.use(authenticateSocket);
     server.use((socket, next) => this.authorizeConversation(socket, next));
 
-    this.accessRevokedSubscription = this.socialEvents.accessRevoked$.subscribe(
-      (event) => void this.closeConversation(event),
+    this.subscriptions.push(
+      this.socialEvents.accessRevoked$.subscribe(
+        (event) => void this.closeConversation(event),
+      ),
+      // Sessions fermées (adresse changée, compte supprimé) : plus de conversation ouverte.
+      accountEvents.signedOutEverywhere$.subscribe(({ userId }) => {
+        this.server.to(userRoom(userId)).emit('session:ended');
+        this.server.in(userRoom(userId)).disconnectSockets(true);
+      }),
     );
   }
 
   onModuleDestroy() {
-    this.accessRevokedSubscription?.unsubscribe();
+    for (const subscription of this.subscriptions) subscription.unsubscribe();
   }
 
   /** `client.data` est rempli par les middlewares : utilisateur et conversation sont garantis. */
   handleConnection(client: ChatSocket) {
     const { user, conversation } = client.data;
-    void client.join(conversation.key);
+    void client.join([conversation.key, userRoom(user.id)]);
     this.chatService.addConnection(client.id, user, conversation.key);
     // Être dans une conversation, c'est aussi être en ligne pour ses amis.
     this.presence.connected(user.id);

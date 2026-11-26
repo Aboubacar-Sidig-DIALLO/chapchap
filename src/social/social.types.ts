@@ -97,6 +97,8 @@ export interface SocialServerEvents {
   'call:started': (event: CallInvite) => void;
   /** Un appel a commencé, changé de participants ou pris fin (`call: null`). */
   'call:changed': (event: CallChange) => void;
+  /** Toutes vos sessions ont été fermées (adresse changée, compte supprimé) : la connexion va se fermer. */
+  'session:ended': () => void;
 }
 
 /** Invitation à rejoindre un appel qui vient de commencer. */

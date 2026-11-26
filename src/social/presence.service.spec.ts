@@ -3,8 +3,8 @@ import { PresenceService } from './presence.service';
 import type { PresenceChange } from './social.types';
 
 function setup() {
-  const update = jest.fn().mockResolvedValue({});
-  const prisma = { user: { update } } as unknown as PrismaClient;
+  const update = jest.fn().mockResolvedValue({ count: 1 });
+  const prisma = { user: { updateMany: update } } as unknown as PrismaClient;
   const presence = new PresenceService(prisma);
   const changes: PresenceChange[] = [];
   presence.changes$.subscribe((change) => changes.push(change));

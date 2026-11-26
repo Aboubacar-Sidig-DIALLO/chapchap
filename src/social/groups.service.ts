@@ -58,6 +58,36 @@ export class GroupsService {
     );
   }
 
+  /** Les autres membres des groupes de `userId`, chacun une fois. */
+  async coMemberIds(userId: string): Promise<string[]> {
+    const members = await this.prisma.groupMember.findMany({
+      where: {
+        group: { members: { some: { userId } } },
+        userId: { not: userId },
+      },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+    return members.map((member) => member.userId);
+  }
+
+  /**
+   * Membres actuels de ces groupes, chacun une fois ; supprime au passage ceux
+   * qui n'ont plus personne (le dernier membre vient de partir).
+   */
+  async pruneAndListMembers(groupIds: string[]): Promise<string[]> {
+    if (groupIds.length === 0) return [];
+    await this.prisma.group.deleteMany({
+      where: { id: { in: groupIds }, members: { none: {} } },
+    });
+    const members = await this.prisma.groupMember.findMany({
+      where: { groupId: { in: groupIds } },
+      select: { userId: true },
+      distinct: ['userId'],
+    });
+    return members.map((member) => member.userId);
+  }
+
   /** Membres actuels d'un groupe (vide s'il n'existe plus). */
   async memberIds(groupId: string): Promise<string[]> {
     const members = await this.prisma.groupMember.findMany({

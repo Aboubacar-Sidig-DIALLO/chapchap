@@ -43,8 +43,9 @@ function parseMedia(value: unknown): CallMedia {
  */
 @WebSocketGateway({ cors: { origin: CLIENT_ORIGIN, credentials: true } })
 export class CallGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  // `!` : assigné par Nest après la construction (`@WebSocketServer`).
   @WebSocketServer()
-  private readonly server: CallServer;
+  private readonly server!: CallServer;
 
   constructor(
     private readonly callService: CallService,

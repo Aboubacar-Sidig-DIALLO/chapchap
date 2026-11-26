@@ -15,4 +15,7 @@ export const AUTH_ERROR = {
   INVALID_EMAIL: 'INVALID_EMAIL',
   ACCOUNT_EXISTS: 'ACCOUNT_EXISTS',
   ACCOUNT_NOT_FOUND: 'ACCOUNT_NOT_FOUND',
+  EMAIL_UNCHANGED: 'EMAIL_UNCHANGED',
+  /** Suppression : l'adresse tapée pour confirmer n'est pas celle du compte. */
+  EMAIL_MISMATCH: 'EMAIL_MISMATCH',
 } as const;

@@ -1,4 +1,4 @@
-import type { NextFunction, Request, Response } from 'express';
+import type { Request } from 'express';
 
 /**
  * En-tête où le serveur dépose l'IP du client, pour Better Auth (limitation
@@ -11,14 +11,22 @@ import type { NextFunction, Request, Response } from 'express';
 export const CLIENT_IP_HEADER = 'x-client-ip';
 
 /**
+ * Middleware accepté par `AuthModule.forRoot({ middleware })`, que la
+ * bibliothèque n'exporte pas. Il doit garder exactement ce type (`req: any`) :
+ * avec un type Express plus précis, TypeScript retient l'ancienne signature
+ * dépréciée `forRoot(auth, options)` au lieu de `forRoot({ auth, ... })`.
+ */
+type AuthModuleMiddleware = (req: any, res: unknown, next: () => void) => void;
+
+/**
  * Remplace l'en-tête par l'IP vue par Express (`req.ip`) : l'adresse de la
  * connexion, ou celle transmise par un proxy si `trust proxy` est configuré.
  */
-export function setClientIp(req: Request, _res: Response, next: NextFunction) {
+export const setClientIp: AuthModuleMiddleware = (req: Request, _res, next) => {
   if (req.ip) {
     req.headers[CLIENT_IP_HEADER] = req.ip;
   } else {
     delete req.headers[CLIENT_IP_HEADER];
   }
   next();
-}
+};

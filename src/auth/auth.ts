@@ -10,6 +10,7 @@ import {
   SESSION_UPDATE_AGE_SECONDS,
 } from './auth.constants';
 import { CLIENT_IP_HEADER } from './client-ip';
+import { accountEvents } from './account-events';
 import { emailOnly } from './email-only.plugin';
 
 /** Nom affiché : espaces superflus retirés, ni vide ni trop long. */
@@ -58,8 +59,10 @@ export const auth = betterAuth({
   session: {
     expiresIn: SESSION_EXPIRES_IN_SECONDS,
     updateAge: SESSION_UPDATE_AGE_SECONDS,
-    // Session lue depuis un cookie signé pendant 5 min : pas de requête SQL à chaque appel.
-    cookieCache: { enabled: true, maxAge: 5 * 60 },
+    // Pas de cache de session dans un cookie : chaque requête relit la session
+    // en base, si bien qu'une session fermée (changement d'email, suppression
+    // du compte) l'est aussitôt sur tous les appareils, pas 5 minutes plus tard.
+    cookieCache: { enabled: false },
   },
 
   databaseHooks: {
@@ -77,6 +80,11 @@ export const auth = betterAuth({
               ? { data: user }
               : { data: { ...user, name: normalizeName(user.name) } },
           ),
+        // Nom ou adresse modifiés : les listes de ses amis se mettent à jour en direct.
+        after: (user) => {
+          accountEvents.updated$.next({ userId: user.id });
+          return Promise.resolve();
+        },
       },
     },
   },

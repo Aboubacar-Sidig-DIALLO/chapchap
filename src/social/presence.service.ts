@@ -76,12 +76,13 @@ export class PresenceService implements OnModuleDestroy {
 
     const lastSeenAt = new Date();
     try {
-      await this.prisma.user.update({
+      // `updateMany` : un compte supprimé entre-temps n'est pas une erreur.
+      await this.prisma.user.updateMany({
         where: { id: userId },
         data: { lastSeenAt },
       });
     } catch (error) {
-      // Compte supprimé entre-temps, ou base momentanément indisponible.
+      // Base momentanément indisponible.
       this.logger.warn(`Dernière présence non enregistrée : ${String(error)}`);
     }
     this.changesSubject.next({
