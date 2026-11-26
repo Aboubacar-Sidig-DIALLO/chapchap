@@ -18,6 +18,7 @@ import { authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
 import {
   ConversationAccessService,
+  directKeyMembers,
   parseConversationRef,
 } from '../social/conversation-access.service';
 import {
@@ -25,6 +26,7 @@ import {
   SocialEvents,
 } from '../social/social-events.service';
 import { PresenceService } from '../social/presence.service';
+import type { PresenceChange } from '../social/social.types';
 import { SocialGateway } from '../social/social.gateway';
 import { toPublicUser, userRoom } from '../social/social.utils';
 import { isReactionEmoji } from './chat.constants';
@@ -110,6 +112,9 @@ export class ChatGateway
       this.socialEvents.accessRevoked$.subscribe(
         (event) => void this.closeConversation(event),
       ),
+      this.presence.changes$.subscribe((change) =>
+        this.relayFriendPresence(change),
+      ),
       // Sessions fermées (adresse changée, compte supprimé) : plus de conversation ouverte.
       accountEvents.signedOutEverywhere$.subscribe(({ userId }) => {
         this.server.to(userRoom(userId)).emit('session:ended');
@@ -138,6 +143,9 @@ export class ChatGateway
     client.emit('chat:history', store.getHistory());
     client.emit('receipts:update', store.getReceipts());
     this.broadcastOnlineUsers(conversation.key);
+    if (conversation.friendId) {
+      void this.sendFriendPresence(client, conversation.friendId);
+    }
   }
 
   handleDisconnect(client: ChatSocket) {
@@ -402,6 +410,27 @@ export class ChatGateway
       conversationKey.startsWith('direct:') ||
       (members?.every((id) => userIds.includes(id)) ?? false);
     if (everyoneRevoked) this.chatService.deleteConversation(conversationKey);
+  }
+
+  /** Conversation privée : où en est l'ami (en ligne, hors ligne depuis…). */
+  private async sendFriendPresence(client: ChatSocket, friendId: string) {
+    try {
+      const presence = await this.presence.presenceOf(friendId);
+      client.emit('friend:presence', { userId: friendId, ...presence });
+    } catch {
+      // Base momentanément indisponible : l'en-tête s'en passe.
+    }
+  }
+
+  /**
+   * Relaie l'arrivée ou le départ d'un utilisateur dans ses conversations
+   * privées ouvertes (l'autre ami y voit sa présence changer).
+   */
+  private relayFriendPresence(change: PresenceChange) {
+    const keys = [...this.server.sockets.adapter.rooms.keys()].filter((key) =>
+      directKeyMembers(key)?.includes(change.userId),
+    );
+    if (keys.length > 0) this.server.to(keys).emit('friend:presence', change);
   }
 
   private broadcastOnlineUsers(conversationKey: string) {

@@ -18,16 +18,22 @@ export interface CallParticipant extends CallMedia {
   joinedAt: string;
 }
 
-/** Trace d'un direct terminé, déposée dans la conversation. */
+/** Trace d'un appel terminé, déposée dans la conversation. */
 export interface CallSummary {
   /** Dates ISO 8601. */
   startedAt: string;
   endedAt: string;
+  /**
+   * Groupe : durée du direct. Entre amis : temps de conversation, compté
+   * depuis la réponse (0 si personne n'a répondu).
+   */
   durationMs: number;
   /** Tous ceux qui y sont passés, par ordre d'arrivée (le premier l'a lancé). */
   participants: ChatUser[];
   /** Au moins une caméra s'est allumée. */
   hadVideo: boolean;
+  /** Entre amis : l'appel a été refusé par celui qu'on appelait. */
+  declined: boolean;
 }
 
 /** Message WebRTC (offre, réponse, candidat ICE) relayé tel quel entre deux participants. */

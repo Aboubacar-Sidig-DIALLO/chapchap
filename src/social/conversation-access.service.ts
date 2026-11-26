@@ -31,6 +31,13 @@ export function directKey(userId: string, otherId: string) {
   return `direct:${userAId}:${userBId}`;
 }
 
+/** Les deux amis d'une conversation privée ; `null` pour toute autre clé. */
+export function directKeyMembers(key: string): [string, string] | null {
+  const [type, userAId, userBId, ...rest] = key.split(':');
+  if (type !== 'direct' || !userAId || !userBId || rest.length > 0) return null;
+  return [userAId, userBId];
+}
+
 export function groupKey(groupId: string) {
   return `group:${groupId}`;
 }

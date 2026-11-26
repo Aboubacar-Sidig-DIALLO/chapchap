@@ -7,6 +7,7 @@ import type {
 } from '../call/call.types';
 import type { AuthSocketData } from '../auth/socket-auth';
 import type { Conversation } from '../social/conversation-access.service';
+import type { PresenceChange } from '../social/social.types';
 import type { ReactionEmoji } from './chat.constants';
 
 export interface ChatUser {
@@ -118,7 +119,13 @@ export interface ServerToClientEvents {
   'session:ended': () => void;
   'chat:history': (messages: ChatMessage[]) => void;
   'message:new': (message: ChatMessage) => void;
+  /** Groupe : qui a la conversation ouverte en ce moment. */
   'users:online': (users: ChatUser[]) => void;
+  /**
+   * Conversation privée : présence de l'ami dans l'application (en ligne, hors
+   * ligne depuis…), à l'ouverture puis à chaque changement.
+   */
+  'friend:presence': (presence: PresenceChange) => void;
   /** Tous les accusés à la connexion, puis uniquement ceux qui changent. */
   'receipts:update': (receipts: ReadReceipt[]) => void;
   /** Un participant écrit, enregistre un vocal, ou s'arrête. */
@@ -131,8 +138,10 @@ export interface ServerToClientEvents {
   'voice:progress': (event: ProgressEvent) => void;
   /** Les réactions d'un message ont changé (diffusé à tous). */
   'message:reactions': (event: ReactionsEvent) => void;
-  /** Participants du direct, à la connexion puis à chaque changement (diffusé à tous). */
+  /** Participants de l'appel, à la connexion puis à chaque changement (diffusé à tous). */
   'call:participants': (participants: CallParticipant[]) => void;
+  /** Appel entre amis terminé par l'autre (raccroché, refusé, sans réponse) : on en sort. */
+  'call:ended': () => void;
   /** Message WebRTC d'un autre participant (`peerId` : l'expéditeur). */
   'call:signal': (signal: CallSignal) => void;
   /** Réaction envoyée pendant le direct. */

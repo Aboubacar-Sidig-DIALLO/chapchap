@@ -2,7 +2,7 @@ import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { Subject } from 'rxjs';
 import { InjectPrisma } from '../database/database.module';
 import type { PrismaClient } from '../generated/prisma/client';
-import type { PresenceChange } from './social.types';
+import type { Presence, PresenceChange } from './social.types';
 
 /**
  * Délai avant de passer « hors ligne » : en passant de l'accueil à une
@@ -35,6 +35,19 @@ export class PresenceService implements OnModuleDestroy {
 
   isOnline(userId: string): boolean {
     return (this.connections.get(userId) ?? 0) > 0;
+  }
+
+  /** Présence de l'utilisateur : en ligne, ou depuis quand il ne l'est plus. */
+  async presenceOf(userId: string): Promise<Presence> {
+    if (this.isOnline(userId)) return { online: true, lastSeenAt: null };
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { lastSeenAt: true },
+    });
+    return {
+      online: false,
+      lastSeenAt: user?.lastSeenAt?.toISOString() ?? null,
+    };
   }
 
   /** Une connexion de l'utilisateur vient de s'ouvrir. */

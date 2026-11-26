@@ -1,8 +1,11 @@
 import type { OnModuleDestroy } from '@nestjs/common';
 import {
+  ConnectedSocket,
+  MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
   OnGatewayInit,
+  SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
@@ -11,7 +14,11 @@ import type { Namespace, Socket } from 'socket.io';
 import { accountEvents } from '../auth/account-events';
 import { type AuthSocketData, authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
-import type { Conversation } from './conversation-access.service';
+import {
+  type Conversation,
+  directKey,
+  parseConversationRef,
+} from './conversation-access.service';
 import { FriendsService } from './friends.service';
 import { GroupsService } from './groups.service';
 import {
@@ -23,19 +30,20 @@ import type {
   ConversationTarget,
   MessageNotice,
   PresenceChange,
+  SocialClientEvents,
   SocialNotice,
   SocialServerEvents,
 } from './social.types';
 import { userRoom } from './social.utils';
 
 type SocialNamespace = Namespace<
-  Record<string, never>,
+  SocialClientEvents,
   SocialServerEvents,
   Record<string, never>,
   AuthSocketData
 >;
 type SocialSocket = Socket<
-  Record<string, never>,
+  SocialClientEvents,
   SocialServerEvents,
   Record<string, never>,
   AuthSocketData
@@ -48,8 +56,8 @@ type SocialSocket = Socket<
  * des conversations privées et de groupe à leurs seuls membres.
  *
  * Le serveur ne fait que prévenir : le client recharge ensuite ses listes
- * depuis l'API, qui reste la seule source de vérité. Aucun message n'est
- * accepté du client.
+ * depuis l'API, qui reste la seule source de vérité. Seul message accepté du
+ * client : le refus d'un appel qui sonne (« Refuser » sur l'accueil).
  */
 @WebSocketGateway({
   namespace: 'social',
@@ -102,6 +110,22 @@ export class SocialGateway
 
   handleDisconnect(client: SocialSocket) {
     if (client.data.user) this.presence.disconnected(client.data.user.id);
+  }
+
+  /**
+   * Refuse l'appel d'un ami. La conversation est déduite de la session : on ne
+   * peut refuser qu'un appel qui vous est destiné.
+   */
+  @SubscribeMessage('call:decline')
+  handleDeclineCall(
+    @ConnectedSocket() client: SocialSocket,
+    @MessageBody() payload: unknown,
+  ) {
+    const { userId } = (payload ?? {}) as Record<string, unknown>;
+    const ref = parseConversationRef({ type: 'direct', userId });
+    const self = client.data.user.id;
+    if (ref?.type !== 'direct' || ref.userId === self) return;
+    this.ongoingCalls.decline(directKey(self, ref.userId), self);
   }
 
   /** Sessions fermées : prévient ses onglets, puis ferme leurs connexions. */

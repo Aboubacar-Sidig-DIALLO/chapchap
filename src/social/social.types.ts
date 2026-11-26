@@ -101,6 +101,12 @@ export interface SocialServerEvents {
   'session:ended': () => void;
 }
 
+/** Événements Socket.io de l'espace `/social` (client → serveur). */
+export interface SocialClientEvents {
+  /** Refuse l'appel de cet ami (il cesse aussitôt de sonner, des deux côtés). */
+  'call:decline': (payload: { userId: string }) => void;
+}
+
 /** Invitation à rejoindre un appel qui vient de commencer. */
 export interface CallInvite {
   conversation: ConversationTarget;
