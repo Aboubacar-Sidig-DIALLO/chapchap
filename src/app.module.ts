@@ -9,6 +9,7 @@ import { CallModule } from './call/call.module';
 import { ChatModule } from './chat/chat.module';
 import { DatabaseModule } from './database/database.module';
 import { SocialModule } from './social/social.module';
+import { TalkieModule } from './talkie/talkie.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { SocialModule } from './social/social.module';
     SocialModule,
     ChatModule,
     CallModule,
+    TalkieModule,
     AdminModule,
   ],
   controllers: [AppController],

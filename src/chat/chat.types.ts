@@ -11,6 +11,11 @@ import type {
   ConversationRights,
   PresenceChange,
 } from '../social/social.types';
+import type {
+  TalkChunkEvent,
+  TalkEndedEvent,
+  TalkEvent,
+} from '../talkie/talkie.types';
 import type { ReactionEmoji } from './chat.constants';
 
 export interface ChatUser {
@@ -176,6 +181,12 @@ export interface ServerToClientEvents {
   'call:signal': (signal: CallSignal) => void;
   /** Réaction envoyée pendant le direct. */
   'call:reaction': (reaction: CallReaction) => void;
+  /** Talkie-walkie : quelqu'un prend la parole en direct. */
+  'talkie:started': (event: TalkEvent) => void;
+  /** Un morceau de sa voix (PCM 16 bits, 16 kHz, mono). */
+  'talkie:chunk': (event: TalkChunkEvent) => void;
+  /** Il a relâché le micro ; diffusé à tous, orateur compris. */
+  'talkie:ended': (event: TalkEndedEvent) => void;
 }
 
 /** Données d'une connexion de chat : l'utilisateur (session) et sa conversation (accès vérifié). */
