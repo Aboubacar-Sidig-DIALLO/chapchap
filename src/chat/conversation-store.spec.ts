@@ -17,6 +17,77 @@ function send(store: ConversationStore, id: string) {
 }
 
 describe('ConversationStore (messages éphémères)', () => {
+  describe("changements par l'auteur tant que personne ne l'a vu", () => {
+    const bob = { id: 'bob', name: 'Bob' };
+    const photo = {
+      id: 'a1',
+      name: 'photo.jpg',
+      mimeType: 'image/jpeg',
+      size: 1,
+      url: '/attachments/a1',
+    };
+
+    function sendWithPhoto(store: ConversationStore) {
+      return store.addMessage({
+        id: 'm1',
+        author: alice,
+        content: 'Regarde',
+        attachments: [photo],
+        createdAt,
+      }).message;
+    }
+
+    it('corrige le texte et le marque comme modifié', () => {
+      const store = new ConversationStore();
+      send(store, 'm1');
+      const result = store.editMessage('m1', alice, 'Bonsoir');
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(store.getHistory()[0].content).toBe('Bonsoir');
+      expect(store.getHistory()[0].editedAt).toBeDefined();
+    });
+
+    it("refuse dès qu'un autre l'a lu, ou si ce n'est pas l'auteur", () => {
+      const store = new ConversationStore();
+      const message = send(store, 'm1');
+      expect(store.editMessage('m1', bob, 'X')).toMatchObject({ ok: false });
+
+      // Reçu seulement : encore modifiable ; lu : verrouillé.
+      store.updateReceipt(bob, { deliveredSeq: message.seq });
+      expect(store.editMessage('m1', alice, 'Salut').ok).toBe(true);
+      store.updateReceipt(bob, { readSeq: message.seq });
+      expect(store.editMessage('m1', alice, 'Coucou').ok).toBe(false);
+      expect(store.unsendMessage('m1', alice).ok).toBe(false);
+    });
+
+    it("ne compte pas la lecture de l'auteur lui-même", () => {
+      const store = new ConversationStore();
+      const message = send(store, 'm1');
+      store.updateReceipt(alice, { readSeq: message.seq });
+      expect(store.unsendMessage('m1', alice).ok).toBe(true);
+      expect(store.getHistory()).toHaveLength(0);
+    });
+
+    it('retire une pièce jointe, puis le message une fois vide', () => {
+      const store = new ConversationStore();
+      sendWithPhoto(store);
+      expect(store.editMessage('m1', alice, '')).toMatchObject({ ok: true });
+
+      const result = store.removeAttachment('m1', 'a1', alice);
+      expect(result).toMatchObject({
+        ok: true,
+        attachment: photo,
+        message: null,
+      });
+      expect(store.getHistory()).toHaveLength(0);
+    });
+
+    it("refuse de vider le texte d'un message sans pièce jointe", () => {
+      const store = new ConversationStore();
+      send(store, 'm1');
+      expect(store.editMessage('m1', alice, '').ok).toBe(false);
+    });
+  });
+
   it('supprime un message pour tous en ne gardant que la mention du modérateur', () => {
     const store = new ConversationStore();
     const moderator = { id: 'bob', name: 'Bob' };

@@ -34,7 +34,7 @@ import {
   SocialEvents,
 } from '../social/social-events.service';
 import { PresenceService } from '../social/presence.service';
-import type { PresenceChange } from '../social/social.types';
+import type { GroupAction, PresenceChange } from '../social/social.types';
 import { SocialGateway } from '../social/social.gateway';
 import { toPublicUser, userRoom } from '../social/social.utils';
 import { isReactionEmoji } from './chat.constants';
@@ -43,7 +43,7 @@ import type { ConversationStore } from './conversation-store';
 import type {
   ChatMessage,
   ConversationInfo,
-  DeleteMessageAck,
+  MessageActionAck,
   SendMessageAck,
   SendMessagePayload,
   ServerToClientEvents,
@@ -264,6 +264,103 @@ export class ChatGateway
   }
 
   /**
+   * L'auteur corrige le texte de son message, tant que personne d'autre ne
+   * l'a vu (vérifié par la conversation, au moment même de la demande).
+   */
+  @SubscribeMessage('message:edit')
+  async handleEdit(
+    @ConnectedSocket() client: ChatSocket,
+    @MessageBody() payload: unknown,
+  ): Promise<MessageActionAck> {
+    const { messageId, content: raw } = (payload ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (typeof messageId !== 'string' || typeof raw !== 'string') {
+      return { ok: false, error: 'Message invalide' };
+    }
+    const content = raw.trim();
+    if (content.length > MAX_MESSAGE_LENGTH) {
+      return { ok: false, error: 'Message trop long' };
+    }
+
+    const { user } = client.data;
+    const accessError = await this.authorError(
+      client,
+      content ? ['write'] : [],
+    );
+    if (accessError) return { ok: false, error: accessError };
+
+    const result = this.store(client).editMessage(messageId, user, content);
+    if (!result.ok) return result;
+    if (result.changed) {
+      this.server
+        .to(client.data.conversation.key)
+        .emit('message:updated', result.message);
+    }
+    return { ok: true };
+  }
+
+  /**
+   * L'auteur retire son message tant que personne d'autre ne l'a vu : il
+   * disparaît partout, ses fichiers avec lui.
+   */
+  @SubscribeMessage('message:unsend')
+  async handleUnsend(
+    @ConnectedSocket() client: ChatSocket,
+    @MessageBody() messageId: unknown,
+  ): Promise<MessageActionAck> {
+    if (typeof messageId !== 'string') {
+      return { ok: false, error: 'Message invalide' };
+    }
+    const accessError = await this.authorError(client, []);
+    if (accessError) return { ok: false, error: accessError };
+
+    const result = this.store(client).unsendMessage(
+      messageId,
+      client.data.user,
+    );
+    if (!result.ok) return result;
+    void this.attachmentsService.discard(result.attachments);
+    this.server
+      .to(client.data.conversation.key)
+      .emit('message:unsent', { messageId });
+    return { ok: true };
+  }
+
+  /**
+   * L'auteur retire une photo, un fichier ou un vocal de son message, tant
+   * que personne d'autre ne l'a vu. Sans plus rien dedans, le message disparaît.
+   */
+  @SubscribeMessage('message:remove-attachment')
+  async handleRemoveAttachment(
+    @ConnectedSocket() client: ChatSocket,
+    @MessageBody() payload: unknown,
+  ): Promise<MessageActionAck> {
+    const { messageId, attachmentId } = (payload ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (typeof messageId !== 'string' || typeof attachmentId !== 'string') {
+      return { ok: false, error: 'Pièce jointe invalide' };
+    }
+    const accessError = await this.authorError(client, []);
+    if (accessError) return { ok: false, error: accessError };
+
+    const result = this.store(client).removeAttachment(
+      messageId,
+      attachmentId,
+      client.data.user,
+    );
+    if (!result.ok) return result;
+    void this.attachmentsService.discard([result.attachment]);
+    const room = this.server.to(client.data.conversation.key);
+    if (result.message) room.emit('message:updated', result.message);
+    else room.emit('message:unsent', { messageId });
+    return { ok: true };
+  }
+
+  /**
    * Supprime un message pour tout le monde : réservé au propriétaire et aux
    * administrateurs d'un groupe (droits relus en base). Ses fichiers sont
    * effacés aussitôt.
@@ -272,7 +369,7 @@ export class ChatGateway
   async handleDelete(
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() messageId: unknown,
-  ): Promise<DeleteMessageAck> {
+  ): Promise<MessageActionAck> {
     const { user, conversation } = client.data;
     if (typeof messageId !== 'string') {
       return { ok: false, error: 'Message invalide' };
@@ -415,6 +512,21 @@ export class ChatGateway
         next();
       })
       .catch(() => next(new Error('FORBIDDEN')));
+  }
+
+  /**
+   * Avant qu'un auteur change son message : il doit toujours avoir accès à
+   * la conversation, et le droit d'écrire s'il y met du texte (droits relus
+   * en base). Retirer ou supprimer reste permis, même restreint.
+   */
+  private async authorError(
+    client: ChatSocket,
+    actions: GroupAction[],
+  ): Promise<string | null> {
+    const { user, conversation } = client.data;
+    const rights = await this.conversationAccess.rights(user.id, conversation);
+    if (!rights) return NO_ACCESS;
+    return restrictionError(rights, actions);
   }
 
   /** La conversation ouverte par cette connexion. */

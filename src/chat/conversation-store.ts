@@ -9,6 +9,14 @@ import type {
 
 const HISTORY_LIMIT = 200;
 
+/** Résultat d'un changement demandé par l'auteur : refusé, avec la raison. */
+export type AuthorChange<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+const NOT_FOUND = 'Ce message a déjà disparu';
+const NOT_YOURS = 'Vous ne pouvez changer que vos propres messages';
+const ALREADY_SEEN =
+  'Ce message a déjà été vu : il ne peut plus être modifié ni supprimé';
+
 export type NewMessage = Omit<
   ChatMessage,
   'seq' | 'expiresAt' | 'listenedBy' | 'listenProgress' | 'reactions'
@@ -121,6 +129,111 @@ export class ConversationStore {
     const others = message.reactions.filter((item) => item.user.id !== user.id);
     message.reactions = emoji ? [...others, { user, emoji }] : others;
     return message.reactions;
+  }
+
+  /**
+   * L'auteur corrige le texte de son message, tant que personne d'autre ne
+   * l'a vu. Vider le texte n'est permis que s'il reste des pièces jointes.
+   */
+  editMessage(
+    messageId: string,
+    author: ChatUser,
+    content: string,
+  ): AuthorChange<{ message: ChatMessage; changed: boolean }> {
+    const found = this.findChangeable(messageId, author);
+    if (!found.ok) return found;
+    const { message } = found;
+
+    if (content === message.content)
+      return { ok: true, message, changed: false };
+    if (!content && message.attachments.length === 0) {
+      return {
+        ok: false,
+        error: 'Un message ne peut pas être vide : supprimez-le plutôt',
+      };
+    }
+    message.content = content;
+    message.editedAt = new Date().toISOString();
+    return { ok: true, message, changed: true };
+  }
+
+  /**
+   * L'auteur retire son message, tant que personne d'autre ne l'a vu : il
+   * disparaît sans laisser de trace. Renvoie ses pièces jointes, à effacer.
+   */
+  unsendMessage(
+    messageId: string,
+    author: ChatUser,
+  ): AuthorChange<{ attachments: Attachment[] }> {
+    const found = this.findChangeable(messageId, author);
+    if (!found.ok) return found;
+
+    this.messages = this.messages.filter((item) => item.id !== messageId);
+    return { ok: true, attachments: found.message.attachments };
+  }
+
+  /**
+   * L'auteur retire une pièce jointe (photo, fichier, vocal) de son message,
+   * tant que personne d'autre ne l'a vu. S'il ne reste plus rien, le message
+   * disparaît (`message: null`).
+   */
+  removeAttachment(
+    messageId: string,
+    attachmentId: string,
+    author: ChatUser,
+  ): AuthorChange<{ attachment: Attachment; message: ChatMessage | null }> {
+    const found = this.findChangeable(messageId, author);
+    if (!found.ok) return found;
+    const { message } = found;
+
+    const attachment = message.attachments.find(
+      (item) => item.id === attachmentId,
+    );
+    if (!attachment) {
+      return { ok: false, error: 'Cette pièce jointe a déjà disparu' };
+    }
+    message.attachments = message.attachments.filter(
+      (item) => item.id !== attachmentId,
+    );
+    if (!message.content && message.attachments.length === 0) {
+      this.messages = this.messages.filter((item) => item.id !== messageId);
+      return { ok: true, attachment, message: null };
+    }
+    message.editedAt = new Date().toISOString();
+    return { ok: true, attachment, message };
+  }
+
+  /**
+   * Vu par quelqu'un d'autre que son auteur : lu à l'écran, ou vocal écouté
+   * (même en partie). Il fait alors partie de la conversation pour de bon.
+   */
+  isSeenByOthers(message: ChatMessage): boolean {
+    if (message.listenedBy.length > 0 || message.listenProgress.length > 0) {
+      return true;
+    }
+    for (const receipt of this.receipts.values()) {
+      if (
+        receipt.user.id !== message.author.id &&
+        receipt.readSeq >= message.seq
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Le message de `author` qu'il peut encore changer, ou pourquoi il ne le peut plus. */
+  private findChangeable(
+    messageId: string,
+    author: ChatUser,
+  ): AuthorChange<{ message: ChatMessage }> {
+    const message = this.messages.find((item) => item.id === messageId);
+    if (!message || message.deletedBy || message.call) {
+      return { ok: false, error: NOT_FOUND };
+    }
+    if (message.author.id !== author.id) return { ok: false, error: NOT_YOURS };
+    if (this.isSeenByOthers(message)) return { ok: false, error: ALREADY_SEEN };
+    return { ok: true, message };
   }
 
   /**

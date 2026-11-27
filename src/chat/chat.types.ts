@@ -46,6 +46,8 @@ export interface ChatMessage {
    * contenu, pièces jointes et réactions effacés, seule reste la mention.
    */
   deletedBy?: ChatUser;
+  /** Date ISO 8601 de la dernière modification par son auteur (texte corrigé, pièce jointe retirée). */
+  editedAt?: string;
 }
 
 export interface MessageDeletedEvent {
@@ -53,7 +55,8 @@ export interface MessageDeletedEvent {
   deletedBy: ChatUser;
 }
 
-export type DeleteMessageAck = { ok: true } | { ok: false; error: string };
+/** Réponse à une action sur un message (suppression, modification…). */
+export type MessageActionAck = { ok: true } | { ok: false; error: string };
 
 export interface Reaction {
   user: ChatUser;
@@ -140,6 +143,10 @@ export interface ServerToClientEvents {
   'session:ended': () => void;
   'chat:history': (messages: ChatMessage[]) => void;
   'message:new': (message: ChatMessage) => void;
+  /** Son auteur a modifié un message (texte corrigé, pièce jointe retirée) ; diffusé à tous. */
+  'message:updated': (message: ChatMessage) => void;
+  /** Son auteur a retiré un message que personne n'avait vu : il disparaît partout. */
+  'message:unsent': (event: { messageId: string }) => void;
   /** Un modérateur a supprimé un message (diffusé à tous). */
   'message:deleted': (event: MessageDeletedEvent) => void;
   /** Groupe : qui a la conversation ouverte en ce moment. */
