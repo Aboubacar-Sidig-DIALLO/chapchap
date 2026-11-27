@@ -34,6 +34,8 @@ import { SocialGateway } from './social.gateway';
     OngoingCallsService,
   ],
   exports: [
+    FriendsService,
+    GroupsService,
     SocialGateway,
     SocialEvents,
     ConversationAccessService,

@@ -270,6 +270,58 @@ export class GroupsService {
   }
 
   /**
+   * Vérifie que `userId` peut inviter dans le groupe par un lien : les mêmes
+   * que ceux qui ajoutent des membres (propriétaire ou administrateur).
+   */
+  async assertCanInvite(userId: string, groupId: string): Promise<void> {
+    await this.require(this.prisma, userId, groupId, 'manager');
+  }
+
+  /** Ce qu'on montre du groupe à qui reçoit une invitation ; `null` s'il n'existe plus. */
+  async invitePreview(groupId: string) {
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      select: {
+        id: true,
+        name: true,
+        photo: true,
+        members: { select: { userId: true } },
+      },
+    });
+    if (!group) return null;
+    return {
+      id: group.id,
+      name: group.name,
+      photoUrl: GroupPhotosService.url(group.photo),
+      memberIds: group.members.map((member) => member.userId),
+    };
+  }
+
+  /**
+   * `userId` rejoint le groupe grâce à l'invitation de `inviterId`, qui doit
+   * toujours pouvoir y ajouter des membres (ses droits ont pu changer depuis).
+   * Sans effet s'il en fait déjà partie (`joined: false`).
+   */
+  async joinByInvite(
+    inviterId: string,
+    groupId: string,
+    userId: string,
+  ): Promise<{ joined: boolean; memberIds: string[] }> {
+    return this.prisma.$transaction(async (tx) => {
+      await this.require(tx, inviterId, groupId, 'manager');
+      const memberIds = await memberIdsOf(tx, groupId);
+      if (memberIds.includes(userId)) return { joined: false, memberIds };
+      if (memberIds.length >= GROUP_MAX_MEMBERS) {
+        throw new BadRequestException(
+          `Ce groupe est complet (${GROUP_MAX_MEMBERS} membres au plus)`,
+        );
+      }
+      await tx.groupMember.create({ data: { groupId, userId } });
+      return { joined: true, memberIds: [...memberIds, userId] };
+    });
+  }
+
+  /**
    * Nomme ou destitue un administrateur, ou règle les restrictions d'un
    * membre (propriétaire). Un administrateur n'est jamais restreint : le
    * nommer lève ses restrictions personnelles.

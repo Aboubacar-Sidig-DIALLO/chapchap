@@ -120,7 +120,16 @@ export interface FriendshipChange {
 export type SocialNotice =
   | { type: 'friend-request'; user: PublicUser }
   | { type: 'friend-accepted'; user: PublicUser }
-  | { type: 'group-added'; user: PublicUser; groupName: string };
+  | { type: 'group-added'; user: PublicUser; groupName: string }
+  /**
+   * `user` a accepté votre invitation (lien ou QR code) : vous êtes amis
+   * (`group: null`), ou il a rejoint ce groupe.
+   */
+  | {
+      type: 'invite-accepted';
+      user: PublicUser;
+      group: { id: string; name: string } | null;
+    };
 
 /** Événements Socket.io de l'espace `/social` (serveur → client). */
 export interface SocialServerEvents {

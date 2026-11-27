@@ -149,5 +149,17 @@ export function socialNotification(
         title: notice.groupName,
         body: `${notice.user.name} vous a ajouté au groupe`,
       };
+    case 'invite-accepted':
+      return notice.group
+        ? {
+            ...base,
+            title: notice.group.name,
+            body: `${notice.user.name} a rejoint le groupe grâce à votre invitation`,
+          }
+        : {
+            ...base,
+            title: notice.user.name,
+            body: 'A accepté votre invitation : vous êtes amis',
+          };
   }
 }

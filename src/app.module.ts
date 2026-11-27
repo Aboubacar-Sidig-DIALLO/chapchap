@@ -8,6 +8,7 @@ import { setClientIp } from './auth/client-ip';
 import { CallModule } from './call/call.module';
 import { ChatModule } from './chat/chat.module';
 import { DatabaseModule } from './database/database.module';
+import { InvitesModule } from './invites/invites.module';
 import { SocialModule } from './social/social.module';
 import { TalkieModule } from './talkie/talkie.module';
 
@@ -19,6 +20,7 @@ import { TalkieModule } from './talkie/talkie.module';
     AuthModule.forRoot({ auth, middleware: setClientIp }),
     DatabaseModule,
     SocialModule,
+    InvitesModule,
     ChatModule,
     CallModule,
     TalkieModule,

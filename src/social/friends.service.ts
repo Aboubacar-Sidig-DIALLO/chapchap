@@ -193,6 +193,38 @@ export class FriendsService {
   }
 
   /**
+   * Rend `userId` et `inviterId` amis d'emblée : `userId` accepte l'invitation
+   * que `inviterId` lui a donnée (lien ou QR code), ce qui vaut accord des
+   * deux. Une demande en cours, dans un sens ou dans l'autre, est acceptée.
+   */
+  async befriend(userId: string, inviterId: string): Promise<FriendshipChange> {
+    if (inviterId === userId) {
+      throw new BadRequestException(
+        'Vous ne pouvez pas vous ajouter vous-même',
+      );
+    }
+    const pair = pairOf(userId, inviterId);
+    const existing = await this.prisma.friendship.findUnique({
+      where: { userAId_userBId: pair },
+      select: { status: true },
+    });
+    if (existing?.status === FriendshipStatus.ACCEPTED) {
+      return { relation: 'friend', changed: false };
+    }
+
+    await this.prisma.friendship.upsert({
+      where: { userAId_userBId: pair },
+      create: {
+        ...pair,
+        requesterId: inviterId,
+        status: FriendshipStatus.ACCEPTED,
+      },
+      update: { status: FriendshipStatus.ACCEPTED },
+    });
+    return { relation: 'friend', changed: true };
+  }
+
+  /**
    * Supprime le lien avec `otherId`, quel qu'il soit : retire un ami,
    * refuse une demande reçue ou annule une demande envoyée.
    */
