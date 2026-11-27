@@ -7,7 +7,8 @@ Backend NestJS de **chapchap**, une messagerie « la voix d'abord » : salon de 
 - **Chat en temps réel** (Socket.io) : messages, historique, présence, « écrit… » / « enregistre un vocal… ».
 - **Accusés** de réception et de lecture (curseurs par utilisateur).
 - **Messages vocaux** : accusé « en écoute » en direct, progression d'écoute en %, « écouté ».
-- **Réactions** aux messages (❤️ 😂 🔥 👏 😮 🙏).
+- **Réactions** aux messages (❤️ 😂 🔥 👏 😮 🙏), y compris sur un moment précis d'un vocal (« 🔥 à 0:42 »).
+- **Réponses** à un message, ou à un passage précis d'un vocal (« à 0:42 ») : la réponse y ramène et l'écoute de là. Le serveur ne garde qu'une référence (`replyTo: { messageId, atMs? }`), jamais une copie : il vérifie que le message cité existe encore et que le moment tombe dans son vocal (pas de moment sur un vocal à écoute unique), et un message retiré ou supprimé ne survit pas dans ses réponses.
 - **Pièces jointes** : envoi (10 Mo max), service avec requêtes `Range` (lecture audio sur Safari).
 - **Direct** (appel audio / vidéo) : signalisation WebRTC, réactions en direct, trace de l'appel déposée dans la conversation à la fin.
 - **Notifications push** (PWA) : messages, appels et demandes d'amis arrivent même application fermée, sans jamais le contenu des messages (« 🎙️ Message vocal · 0:42 »). Seuls les services push des navigateurs sont acceptés comme destination ; les abonnements morts sont effacés, ceux d'un compte aussi quand toutes ses sessions sont fermées.

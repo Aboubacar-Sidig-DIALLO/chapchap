@@ -6,6 +6,7 @@ import type {
   Reaction,
   ReadReceipt,
 } from './chat.types';
+import { isMomentOf, voiceDurationOf } from './replies';
 import { toViewOnceItem } from './view-once';
 
 const HISTORY_LIMIT = 200;
@@ -207,22 +208,31 @@ export class ConversationStore {
   }
 
   /**
-   * Pose, remplace ou retire (`null`) la réaction de `user` sur un message.
-   * Retourne les réactions à jour, ou `null` si rien n'a changé.
+   * Pose, remplace ou retire (`null`) la réaction de `user` sur un message ;
+   * `atMs` la pose sur un moment précis de son vocal (« 🔥 à 0:42 »).
+   * Retourne les réactions à jour, ou `null` si rien n'a changé (ou si le
+   * moment n'existe pas dans le vocal).
    */
   setReaction(
     messageId: string,
     user: ChatUser,
     emoji: ReactionEmoji | null,
+    atMs?: number,
   ): Reaction[] | null {
     const message = this.messages.find((item) => item.id === messageId);
     if (!message || message.deletedBy) return null;
+    if (emoji && atMs !== undefined && !isMomentOf(message, atMs)) return null;
 
     const current = message.reactions.find((item) => item.user.id === user.id);
-    if ((current?.emoji ?? null) === emoji) return null;
+    const isUnchanged = emoji
+      ? current?.emoji === emoji && current.atMs === atMs
+      : !current;
+    if (isUnchanged) return null;
 
     const others = message.reactions.filter((item) => item.user.id !== user.id);
-    message.reactions = emoji ? [...others, { user, emoji }] : others;
+    message.reactions = emoji
+      ? [...others, { user, emoji, ...(atMs !== undefined && { atMs }) }]
+      : others;
     return message.reactions;
   }
 
@@ -298,6 +308,13 @@ export class ConversationStore {
     if (!message.content && message.attachments.length === 0) {
       this.messages = this.messages.filter((item) => item.id !== messageId);
       return { ok: true, attachment, message: null };
+    }
+    // Plus de vocal : les réactions posées sur l'un de ses moments valent pour tout le message.
+    if (voiceDurationOf(message) === null) {
+      message.reactions = message.reactions.map(({ user, emoji }) => ({
+        user,
+        emoji,
+      }));
     }
     message.editedAt = new Date().toISOString();
     return { ok: true, attachment, message };

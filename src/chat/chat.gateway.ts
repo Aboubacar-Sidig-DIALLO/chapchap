@@ -45,6 +45,7 @@ import { toPublicUser, userRoom } from '../social/social.utils';
 import { isReactionEmoji } from './chat.constants';
 import { ChatService } from './chat.service';
 import type { ConversationStore } from './conversation-store';
+import { parseReplyTo } from './replies';
 import type {
   ChatMessage,
   ConversationInfo,
@@ -253,6 +254,10 @@ export class ChatGateway
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) {
       return { ok: false, error: 'Trop de pièces jointes' };
     }
+    const reply = parseReplyTo(payload.replyTo, (id) =>
+      this.store(client).find(id),
+    );
+    if (!reply.ok) return reply;
 
     const attachments = this.attachmentsService.resolve(attachmentIds);
     if (!attachments) {
@@ -279,6 +284,7 @@ export class ChatGateway
         content,
         attachments,
         createdAt: new Date().toISOString(),
+        ...(reply.replyTo && { replyTo: reply.replyTo }),
       },
       viewOnce ? { viewOnceFor: recipientsOf(conversation, user.id) } : {},
     );
@@ -553,20 +559,29 @@ export class ChatGateway
     }
   }
 
-  /** Le participant réagit à un message (`emoji`), ou retire sa réaction (`null`). */
+  /**
+   * Le participant réagit à un message (`emoji`), ou retire sa réaction
+   * (`null`). `atMs` : sur un moment précis de son vocal (« 🔥 à 0:42 »).
+   */
   @SubscribeMessage('message:react')
   handleReact(
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() payload: unknown,
   ) {
-    const { messageId, emoji } = (payload ?? {}) as Record<string, unknown>;
+    const { messageId, emoji, atMs } = (payload ?? {}) as Record<
+      string,
+      unknown
+    >;
     if (typeof messageId !== 'string') return;
     if (emoji !== null && !isReactionEmoji(emoji)) return;
+    // Le moment lui-même est vérifié par la conversation, qui connaît le vocal.
+    if (atMs !== undefined && atMs !== null && typeof atMs !== 'number') return;
 
     const reactions = this.store(client).setReaction(
       messageId,
       client.data.user,
       emoji,
+      atMs ?? undefined,
     );
     if (reactions) {
       this.server

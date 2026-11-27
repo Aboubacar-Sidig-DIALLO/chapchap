@@ -44,6 +44,8 @@ export interface ChatMessage {
   listenProgress: ListenProgress[];
   /** Une réaction au plus par participant. */
   reactions: Reaction[];
+  /** Le message auquel celui-ci répond (et, pour un vocal, à quel moment). */
+  replyTo?: ReplyRef;
   /**
    * Trace d'un direct terminé : message déposé par le serveur (jamais par un
    * client), au nom de celui qui l'avait lancé.
@@ -108,6 +110,19 @@ export type MessageActionAck = { ok: true } | { ok: false; error: string };
 export interface Reaction {
   user: ChatUser;
   emoji: ReactionEmoji;
+  /** Posée sur un moment précis du vocal (ms depuis son début) ; absente : sur tout le message. */
+  atMs?: number;
+}
+
+/**
+ * Référence au message cité, jamais une copie : chacun le retrouve dans sa
+ * propre conversation, et un message retiré ou supprimé ne survit pas dans
+ * ses réponses.
+ */
+export interface ReplyRef {
+  messageId: string;
+  /** Moment précis du vocal cité (ms depuis son début). */
+  atMs?: number;
 }
 
 export interface ReactionsEvent {
@@ -132,6 +147,8 @@ export interface SendMessagePayload {
   attachmentIds?: string[];
   /** Pièces jointes à vue unique (le message ne contient alors pas de texte). */
   viewOnce?: boolean;
+  /** Le message auquel on répond (vérifié par le serveur). */
+  replyTo?: unknown;
 }
 
 export type SendMessageAck =
