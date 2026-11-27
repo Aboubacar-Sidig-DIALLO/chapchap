@@ -29,6 +29,7 @@ import { PresenceService } from './presence.service';
 import type {
   ConversationTarget,
   MessageNotice,
+  MessageRemovedNotice,
   PresenceChange,
   SocialClientEvents,
   SocialNotice,
@@ -187,6 +188,14 @@ export class SocialGateway
   notifyMessage(userIds: string[], notice: MessageNotice) {
     if (userIds.length === 0) return;
     this.server.to(userIds.map(userRoom)).emit('social:message', notice);
+  }
+
+  /** Signale aux destinataires qu'un message annoncé n'est plus à lire (pastille décomptée). */
+  notifyMessageRemoved(userIds: string[], notice: MessageRemovedNotice) {
+    if (userIds.length === 0) return;
+    this.server
+      .to(userIds.map(userRoom))
+      .emit('social:message-removed', notice);
   }
 }
 

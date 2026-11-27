@@ -94,7 +94,10 @@ describe('ConversationStore (messages éphémères)', () => {
     send(store, 'm1');
     store.setReaction('m1', moderator, '❤️');
 
-    expect(store.deleteMessage('m1', moderator)).toEqual([]);
+    expect(store.deleteMessage('m1', moderator)).toEqual({
+      author: alice,
+      attachments: [],
+    });
     expect(store.getHistory()[0]).toMatchObject({
       content: '',
       attachments: [],

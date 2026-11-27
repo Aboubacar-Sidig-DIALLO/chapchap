@@ -34,7 +34,11 @@ import {
   SocialEvents,
 } from '../social/social-events.service';
 import { PresenceService } from '../social/presence.service';
-import type { GroupAction, PresenceChange } from '../social/social.types';
+import type {
+  ConversationTarget,
+  GroupAction,
+  PresenceChange,
+} from '../social/social.types';
 import { SocialGateway } from '../social/social.gateway';
 import { toPublicUser, userRoom } from '../social/social.utils';
 import { isReactionEmoji } from './chat.constants';
@@ -76,6 +80,32 @@ function conversationInfo(
   const { type, title, photoUrl } = conversation;
   const rights = rightsIn(conversation, userId) ?? DIRECT_RIGHTS;
   return { type, title, photoUrl, rights };
+}
+
+/**
+ * La conversation telle que la voient ses membres autres que `authorId` (sur
+ * leur accueil) : l'ami qui écrit, ou le groupe.
+ */
+function targetForOthers(
+  conversation: Conversation,
+  authorId: string,
+): ConversationTarget | null {
+  if (conversation.type === 'direct') {
+    return { type: 'direct', userId: authorId };
+  }
+  if (conversation.groupId) {
+    return {
+      type: 'group',
+      groupId: conversation.groupId,
+      groupName: conversation.title,
+    };
+  }
+  return null;
+}
+
+/** Ceux qui reçoivent les messages de `authorId` : tous les membres, sauf lui. */
+function recipientsOf(conversation: Conversation, authorId: string) {
+  return conversation.memberIds.filter((id) => id !== authorId);
 }
 
 function isUserActivity(value: unknown): value is UserActivity {
@@ -325,6 +355,7 @@ export class ChatGateway
     this.server
       .to(client.data.conversation.key)
       .emit('message:unsent', { messageId });
+    this.notifyRemoved(client, messageId, client.data.user.id);
     return { ok: true };
   }
 
@@ -355,8 +386,13 @@ export class ChatGateway
     if (!result.ok) return result;
     void this.attachmentsService.discard([result.attachment]);
     const room = this.server.to(client.data.conversation.key);
-    if (result.message) room.emit('message:updated', result.message);
-    else room.emit('message:unsent', { messageId });
+    if (result.message) {
+      room.emit('message:updated', result.message);
+    } else {
+      // Plus rien dedans : le message disparaît, comme retiré.
+      room.emit('message:unsent', { messageId });
+      this.notifyRemoved(client, messageId, client.data.user.id);
+    }
     return { ok: true };
   }
 
@@ -385,14 +421,15 @@ export class ChatGateway
       };
     }
 
-    const attachments = this.store(client).deleteMessage(messageId, user);
-    if (!attachments) {
+    const deleted = this.store(client).deleteMessage(messageId, user);
+    if (!deleted) {
       return { ok: false, error: 'Ce message a déjà disparu' };
     }
-    void this.attachmentsService.discard(attachments);
+    void this.attachmentsService.discard(deleted.attachments);
     this.server
       .to(conversation.key)
       .emit('message:deleted', { messageId, deletedBy: user });
+    this.notifyRemoved(client, messageId, deleted.author.id);
     return { ok: true };
   }
 
@@ -552,25 +589,38 @@ export class ChatGateway
    * de groupe, sur leur accueil (sans son contenu).
    */
   private notifyMembers(client: ChatSocket, message: ChatMessage) {
-    const { user, conversation } = client.data;
-    const recipients = conversation.memberIds.filter((id) => id !== user.id);
-    const from = toPublicUser(message.author);
+    const { conversation } = client.data;
+    const target = targetForOthers(conversation, message.author.id);
+    if (!target) return;
 
-    if (conversation.type === 'direct') {
-      this.socialGateway.notifyMessage(recipients, {
-        conversation: { type: 'direct', userId: user.id },
-        from,
-      });
-    } else if (conversation.type === 'group' && conversation.groupId) {
-      this.socialGateway.notifyMessage(recipients, {
-        conversation: {
-          type: 'group',
-          groupId: conversation.groupId,
-          groupName: conversation.title,
-        },
-        from,
-      });
-    }
+    this.socialGateway.notifyMessage(
+      recipientsOf(conversation, message.author.id),
+      {
+        conversation: target,
+        from: toPublicUser(message.author),
+        messageId: message.id,
+        expiresAt: message.expiresAt,
+      },
+    );
+  }
+
+  /**
+   * Un message retiré par son auteur ou supprimé par un modérateur n'est plus
+   * à lire : les pastilles de l'accueil des destinataires le décomptent.
+   */
+  private notifyRemoved(
+    client: ChatSocket,
+    messageId: string,
+    authorId: string,
+  ) {
+    const { conversation } = client.data;
+    const target = targetForOthers(conversation, authorId);
+    if (!target) return;
+
+    this.socialGateway.notifyMessageRemoved(
+      recipientsOf(conversation, authorId),
+      { conversation: target, messageId },
+    );
   }
 
   /**

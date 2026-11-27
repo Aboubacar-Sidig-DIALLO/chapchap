@@ -238,15 +238,18 @@ export class ConversationStore {
 
   /**
    * Supprime un message pour tout le monde (modération) : il ne garde que la
-   * mention de qui l'a supprimé. Renvoie ses pièces jointes, à effacer du
-   * disque ; `null` si le message n'existe pas, est déjà supprimé ou est
-   * la trace d'un appel.
+   * mention de qui l'a supprimé. Renvoie son auteur et ses pièces jointes (à
+   * effacer du disque) ; `null` si le message n'existe pas, est déjà supprimé
+   * ou est la trace d'un appel.
    */
-  deleteMessage(messageId: string, by: ChatUser): Attachment[] | null {
+  deleteMessage(
+    messageId: string,
+    by: ChatUser,
+  ): { author: ChatUser; attachments: Attachment[] } | null {
     const message = this.messages.find((item) => item.id === messageId);
     if (!message || message.deletedBy || message.call) return null;
 
-    const { attachments } = message;
+    const { author, attachments } = message;
     Object.assign(message, {
       content: '',
       attachments: [],
@@ -255,7 +258,7 @@ export class ConversationStore {
       listenProgress: [],
       deletedBy: by,
     } satisfies Partial<ChatMessage>);
-    return attachments;
+    return { author, attachments };
   }
 
   /** Vrai si `user` peut signaler l'écoute en cours de ce message (un vocal d'un autre). */
