@@ -9,6 +9,7 @@ import webpush, { WebPushError } from 'web-push';
 import { accountEvents } from '../auth/account-events';
 import { InjectPrisma } from '../database/database.module';
 import type { PrismaClient } from '../generated/prisma/client';
+import { QuietModeService } from '../quiet-mode/quiet-mode.service';
 import { VAPID } from './push.config';
 import type { SubscriptionInput } from './push.schemas';
 import type { PushDelivery, PushNotification } from './push.types';
@@ -29,7 +30,10 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
   private subscription?: Subscription;
   readonly isEnabled = Boolean(VAPID.publicKey && VAPID.privateKey);
 
-  constructor(@InjectPrisma() private readonly prisma: PrismaClient) {}
+  constructor(
+    @InjectPrisma() private readonly prisma: PrismaClient,
+    private readonly quietMode: QuietModeService,
+  ) {}
 
   onModuleInit() {
     if (this.isEnabled) {
@@ -99,13 +103,25 @@ export class PushService implements OnModuleInit, OnModuleDestroy {
     notification: PushNotification,
     delivery: PushDelivery,
   ) {
-    const subscriptions = await this.prisma.pushSubscription.findMany({
-      where: { userId: { in: userIds } },
-    });
-    const payload = JSON.stringify(notification);
+    const [subscriptions, quietIds] = await Promise.all([
+      this.prisma.pushSubscription.findMany({
+        where: { userId: { in: userIds } },
+      }),
+      this.quietMode.quietUserIds(userIds),
+    ]);
+    // Heures calmes : la notification arrive quand même, mais sans bruit.
+    const quiet = new Set(quietIds);
+    const payloads = {
+      normal: JSON.stringify(notification),
+      silent: JSON.stringify({ ...notification, silent: true }),
+    };
     await Promise.all(
       subscriptions.map((subscription) =>
-        this.sendTo(subscription, payload, delivery),
+        this.sendTo(
+          subscription,
+          quiet.has(subscription.userId) ? payloads.silent : payloads.normal,
+          delivery,
+        ),
       ),
     );
   }

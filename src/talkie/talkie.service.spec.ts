@@ -40,26 +40,26 @@ describe('TalkieService', () => {
   });
 
   it("ignore le son d'une autre connexion que l'orateur", () => {
-    service.claim(key, 's1', ana, 'm1', 0);
+    service.claim(key, 's1', ana, 'm1', { now: 0 });
     expect(service.accept(key, 's2', 100, 0)).toBe('ignored');
     expect(service.accept('group:x', 's1', 100, 0)).toBe('ignored');
   });
 
   it('accepte le débit d’une voix, avance de départ comprise', () => {
-    service.claim(key, 's1', ana, 'm1', 0);
+    service.claim(key, 's1', ana, 'm1', { now: 0 });
     const burst = (BURST_ALLOWANCE_MS / 1000) * TALKIE_BYTES_PER_SECOND;
     expect(service.accept(key, 's1', burst, 0)).toBe('ok');
     expect(service.accept(key, 's1', TALKIE_BYTES_PER_SECOND, 1000)).toBe('ok');
   });
 
   it('coupe un débit anormal', () => {
-    service.claim(key, 's1', ana, 'm1', 0);
+    service.claim(key, 's1', ana, 'm1', { now: 0 });
     const burst = (BURST_ALLOWANCE_MS / 1000) * TALKIE_BYTES_PER_SECOND;
     expect(service.accept(key, 's1', burst + 2, 0)).toBe('over');
   });
 
   it('coupe au-delà de la durée maximale', () => {
-    service.claim(key, 's1', ana, 'm1', 0);
+    service.claim(key, 's1', ana, 'm1', { now: 0 });
     expect(service.accept(key, 's1', 2, MAX_TALK_MS + 1)).toBe('over');
   });
 });

@@ -15,6 +15,11 @@ export interface Talk {
   user: ChatUser;
   startedAt: number;
   receivedBytes: number;
+  /**
+   * Participants en heures calmes : la voix ne leur est pas relayée (ils
+   * recevront le vocal). Complétée si l'un d'eux arrive en cours de route.
+   */
+  quietUserIds: string[];
 }
 
 export type ClaimResult =
@@ -45,14 +50,24 @@ export class TalkieService {
     socketId: string,
     user: ChatUser,
     id: string,
-    now = Date.now(),
+    {
+      quietUserIds = [],
+      now = Date.now(),
+    }: { quietUserIds?: string[]; now?: number } = {},
   ): ClaimResult {
     const current = this.talks.get(conversationKey);
     if (current && current.socketId !== socketId) {
       return { ok: false, speaker: current.user };
     }
 
-    const talk: Talk = { id, socketId, user, startedAt: now, receivedBytes: 0 };
+    const talk: Talk = {
+      id,
+      socketId,
+      user,
+      startedAt: now,
+      receivedBytes: 0,
+      quietUserIds,
+    };
     this.talks.set(conversationKey, talk);
     return { ok: true, talk };
   }

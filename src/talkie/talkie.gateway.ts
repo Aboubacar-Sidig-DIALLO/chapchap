@@ -17,6 +17,8 @@ import {
   rightsIn,
 } from '../social/conversation-access.service';
 import { restrictionError } from '../social/group-rights';
+import { userRoom } from '../social/social.utils';
+import { QuietModeService } from '../quiet-mode/quiet-mode.service';
 import { MAX_CHUNK_BYTES, TALK_IDLE_TIMEOUT_MS } from './talkie.constants';
 import { TalkieService, type Talk } from './talkie.service';
 import type { TalkStartAck } from './talkie.types';
@@ -56,6 +58,10 @@ function isAudioChunk(value: unknown): value is Buffer {
  * Le même enregistrement part ensuite comme vocal classique (même id) :
  * les absents le reçoivent, et ceux qui l'ont entendu en direct le voient
  * déjà « écouté ».
+ *
+ * Heures calmes : ceux qui ne veulent pas être dérangés n'entendent rien en
+ * direct. Le talkie bascule pour eux en vocal différé : ils reçoivent le
+ * vocal, sans bruit, à écouter quand ils voudront.
  */
 @WebSocketGateway({ cors: { origin: CLIENT_ORIGIN, credentials: true } })
 export class TalkieGateway
@@ -71,16 +77,33 @@ export class TalkieGateway
     private readonly talkieService: TalkieService,
     private readonly chatService: ChatService,
     private readonly conversationAccess: ConversationAccessService,
+    private readonly quietMode: QuietModeService,
   ) {}
 
   onModuleDestroy() {
     this.idleTimers.forEach((timer) => clearTimeout(timer));
   }
 
-  /** Arrivé pendant que quelqu'un parle : on entend la suite. */
-  handleConnection(client: TalkieSocket) {
-    const talk = this.talkieService.current(client.data.conversation.key);
-    if (talk) client.emit('talkie:started', { id: talk.id, user: talk.user });
+  /**
+   * Arrivé pendant que quelqu'un parle : on entend la suite — sauf en heures
+   * calmes, où l'on attendra le vocal.
+   */
+  async handleConnection(client: TalkieSocket) {
+    const { user, conversation } = client.data;
+    const talk = this.talkieService.current(conversation.key);
+    if (!talk) return;
+
+    if (
+      talk.quietUserIds.includes(user.id) ||
+      (await this.quietMode.isQuiet(user.id))
+    ) {
+      if (!talk.quietUserIds.includes(user.id)) talk.quietUserIds.push(user.id);
+      return;
+    }
+    // Toujours la même prise de parole (l'attente a pu durer) : on l'annonce.
+    if (this.talkieService.current(conversation.key) === talk) {
+      client.emit('talkie:started', { id: talk.id, user: talk.user });
+    }
   }
 
   handleDisconnect(client: TalkieSocket) {
@@ -110,22 +133,35 @@ export class TalkieGateway
       : "Vous n'avez plus accès à cette conversation";
     if (forbidden) return { ok: false, reason: 'forbidden', error: forbidden };
 
-    const listeners = this.chatService
+    const present = this.chatService
       .getOnlineUsers(conversation.key)
       .filter((listener) => listener.id !== user.id);
-    if (listeners.length === 0) return { ok: false, reason: 'alone' };
+    if (present.length === 0) return { ok: false, reason: 'alone' };
+
+    // Heures calmes : ceux-là recevront le vocal, sans l'entendre en direct.
+    const quietIds = new Set(
+      await this.quietMode.quietUserIds(present.map((listener) => listener.id)),
+    );
+    const listeners = present.filter((listener) => !quietIds.has(listener.id));
+    const deferred = present.filter((listener) => quietIds.has(listener.id));
+    if (listeners.length === 0) {
+      return { ok: false, reason: 'quiet', users: deferred };
+    }
 
     const claim = this.talkieService.claim(
       conversation.key,
       client.id,
       user,
       id,
+      {
+        quietUserIds: [...quietIds],
+      },
     );
     if (!claim.ok) return { ok: false, reason: 'busy', speaker: claim.speaker };
 
     this.armIdleTimer(client);
-    client.to(conversation.key).emit('talkie:started', { id, user });
-    return { ok: true, listeners };
+    this.toListeners(client, claim.talk).emit('talkie:started', { id, user });
+    return { ok: true, listeners, deferred };
   }
 
   /** Un morceau de voix de l'orateur, relayé aux autres connexions de la conversation. */
@@ -157,7 +193,7 @@ export class TalkieGateway
     const talk = this.talkieService.current(conversation.key);
     if (!talk) return;
     this.armIdleTimer(client);
-    client.to(conversation.key).emit('talkie:chunk', { id: talk.id, audio });
+    this.toListeners(client, talk).emit('talkie:chunk', { id: talk.id, audio });
   }
 
   /** L'orateur a relâché (`cancelled` : il a annulé son vocal). */
@@ -180,10 +216,19 @@ export class TalkieGateway
     this.announceEnd(key, talk, cancelled);
   }
 
+  /** Fin du direct, pour tous ceux qui l'entendaient, orateur compris. */
   private announceEnd(key: string, talk: Talk, cancelled: boolean) {
     this.server
       .to(key)
+      .except(talk.quietUserIds.map(userRoom))
       .emit('talkie:ended', { id: talk.id, user: talk.user, cancelled });
+  }
+
+  /** Les autres connexions de la conversation, sauf celles des personnes en heures calmes. */
+  private toListeners(client: TalkieSocket, talk: Talk) {
+    return client
+      .to(client.data.conversation.key)
+      .except(talk.quietUserIds.map(userRoom));
   }
 
   private armIdleTimer(client: TalkieSocket) {

@@ -9,6 +9,7 @@ import { CallModule } from './call/call.module';
 import { ChatModule } from './chat/chat.module';
 import { DatabaseModule } from './database/database.module';
 import { InvitesModule } from './invites/invites.module';
+import { QuietModeModule } from './quiet-mode/quiet-mode.module';
 import { SocialModule } from './social/social.module';
 import { TalkieModule } from './talkie/talkie.module';
 
@@ -21,6 +22,7 @@ import { TalkieModule } from './talkie/talkie.module';
     DatabaseModule,
     SocialModule,
     InvitesModule,
+    QuietModeModule,
     ChatModule,
     CallModule,
     TalkieModule,

@@ -15,6 +15,8 @@ export interface PushNotification {
   url: string;
   /** Date ISO 8601 de l'événement. */
   createdAt: string;
+  /** Heures calmes du destinataire : affichée sans son ni vibration. */
+  silent?: boolean;
 }
 
 /** Ce que contient un message, pour l'annoncer sans en dévoiler le contenu. */

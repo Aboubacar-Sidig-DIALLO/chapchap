@@ -41,6 +41,7 @@ model User {
   ownedGroups      Group[]
 
   pushSubscriptions PushSubscription[]
+  quietMode         QuietMode?
 
   @@map("user")
 }
@@ -191,4 +192,26 @@ model PushSubscription {
 
   @@index([userId])
   @@map("push_subscription")
+}
+
+// ─── Heures calmes / Ne pas déranger ────────────────────────────────────────
+
+/// Quand l'utilisateur ne veut pas être dérangé : chaque jour à heure fixe, ou
+/// à la main. Pendant ce temps, rien ne sonne (vocaux, notifications) et le
+/// talkie-walkie lui arrive en vocal à écouter plus tard.
+model QuietMode {
+  userId          String    @id
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Heures calmes chaque jour, de `startMinute` à `endMinute` (minutes depuis minuit, heure de `timeZone`).
+  scheduleEnabled Boolean   @default(false)
+  startMinute     Int       @default(1320)
+  endMinute       Int       @default(420)
+  /// Fuseau horaire IANA de l'appareil qui a réglé l'horaire (ex. « Europe/Paris »).
+  timeZone        String    @default("UTC")
+  /// Ne pas déranger, activé à la main ; jusqu'à `manualUntil`, ou jusqu'à ce qu'il le désactive (`null`).
+  manualOn        Boolean   @default(false)
+  manualUntil     DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@map("quiet_mode")
 }
