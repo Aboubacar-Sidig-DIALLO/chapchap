@@ -5,13 +5,25 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectPrisma } from '../database/database.module';
-import type { Prisma, PrismaClient } from '../generated/prisma/client';
+import type {
+  Prisma,
+  PrismaClient,
+  GroupRole as StoredRole,
+} from '../generated/prisma/client';
 import { groupKey } from './conversation-access.service';
 import { FriendsService } from './friends.service';
 import { GroupPhotosService } from './group-photos.service';
+import {
+  ALL_ALLOWED,
+  groupPermissions,
+  memberPermissions,
+  roleOf,
+  toStoredGroupPermissions,
+  toStoredMemberPermissions,
+} from './group-rights';
 import { OngoingCallsService } from './ongoing-calls.service';
 import { GROUP_MAX_MEMBERS, PUBLIC_USER_SELECT } from './social.constants';
-import type { GroupSummary, PublicUser } from './social.types';
+import type { GroupPermissions, GroupSummary } from './social.types';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -23,19 +35,21 @@ const BY_SENIORITY = [
 
 const GROUP_INCLUDE = {
   members: {
-    select: { user: { select: PUBLIC_USER_SELECT } },
+    select: {
+      userId: true,
+      role: true,
+      canWrite: true,
+      canSendVoice: true,
+      canCall: true,
+      user: { select: PUBLIC_USER_SELECT },
+    },
     orderBy: BY_SENIORITY,
   },
-} as const;
+} satisfies Prisma.GroupInclude;
 
-interface GroupWithMembers {
-  id: string;
-  name: string;
-  photo: string | null;
-  ownerId: string | null;
-  createdAt: Date;
-  members: { user: PublicUser }[];
-}
+type GroupWithMembers = Prisma.GroupGetPayload<{
+  include: typeof GROUP_INCLUDE;
+}>;
 
 /** Un groupe modifié, et ceux à prévenir. */
 export interface GroupChange {
@@ -44,14 +58,34 @@ export interface GroupChange {
   addedIds: string[];
 }
 
+/** Changement de rôle ou de restrictions d'un membre. */
+export interface MemberUpdate {
+  role?: 'admin' | 'member';
+  permissions?: GroupPermissions;
+}
+
 const NOT_FOUND = 'Groupe introuvable';
-const OWNER_ONLY = 'Seul le propriétaire du groupe peut le modifier';
+const NOT_A_MEMBER = 'Cette personne ne fait plus partie du groupe';
+
+/** Qui peut faire quoi : le propriétaire seul, ou aussi ses administrateurs. */
+const REQUIRED_ROLE = {
+  owner: {
+    roles: ['owner'],
+    error: 'Seul le propriétaire du groupe peut faire cela',
+  },
+  manager: {
+    roles: ['owner', 'admin'],
+    error:
+      'Seuls le propriétaire et les administrateurs du groupe peuvent faire cela',
+  },
+} as const;
 
 /**
- * Groupes d'amis. Chaque groupe a un propriétaire, toujours membre : lui seul
- * le renomme, change sa photo, y ajoute ou en retire des membres. Quand il
- * part, le membre le plus ancien prend le relais ; le dernier à partir
- * supprime le groupe.
+ * Groupes d'amis. Chaque groupe a un propriétaire, toujours membre, qui le
+ * renomme, change sa photo, gère ses membres, leurs rôles et leurs
+ * autorisations. Ses administrateurs l'aident : ils ajoutent des membres et
+ * suppriment des messages. Pour partir, le propriétaire désigne son
+ * successeur ; le dernier à partir supprime le groupe.
  */
 @Injectable()
 export class GroupsService {
@@ -97,8 +131,8 @@ export class GroupsService {
 
   /**
    * Après la suppression d'un compte : supprime ses groupes restés sans
-   * membre, donne un nouveau propriétaire à ceux qu'il administrait, et
-   * renvoie les membres restants, chacun une fois.
+   * membre, donne un nouveau propriétaire à ceux qu'il possédait (il n'a pas
+   * pu le choisir), et renvoie les membres restants, chacun une fois.
    */
   async pruneAndListMembers(groupIds: string[]): Promise<string[]> {
     if (groupIds.length === 0) return [];
@@ -118,7 +152,8 @@ export class GroupsService {
       where: { id: { in: groupIds }, ownerId: null },
       select: { id: true },
     });
-    for (const group of ownerless) await handOver(this.prisma, group.id);
+    for (const group of ownerless)
+      await appointSuccessor(this.prisma, group.id);
 
     const members = await this.prisma.groupMember.findMany({
       where: { groupId: { in: groupIds } },
@@ -130,11 +165,7 @@ export class GroupsService {
 
   /** Membres actuels d'un groupe (vide s'il n'existe plus). */
   async memberIds(groupId: string): Promise<string[]> {
-    const members = await this.prisma.groupMember.findMany({
-      where: { groupId },
-      select: { userId: true },
-    });
-    return members.map((member) => member.userId);
+    return memberIdsOf(this.prisma, groupId);
   }
 
   /** Crée un groupe avec des amis du créateur, qui en devient le propriétaire. */
@@ -157,24 +188,32 @@ export class GroupsService {
     return this.toSummary(group);
   }
 
-  /** Renomme le groupe (propriétaire uniquement). */
+  /** Renomme le groupe (propriétaire). */
   async rename(
     userId: string,
     groupId: string,
     name: string,
   ): Promise<GroupSummary> {
-    await this.requireOwner(this.prisma, userId, groupId);
-    const group = await this.prisma.group.update({
-      where: { id: groupId },
-      data: { name },
-      include: GROUP_INCLUDE,
-    });
-    return this.toSummary(group);
+    await this.require(this.prisma, userId, groupId, 'owner');
+    return this.update(groupId, { name });
   }
 
   /**
-   * Remplace la photo du groupe (`bytes`), ou la retire (`null`). Propriétaire
-   * uniquement ; l'ancienne photo est supprimée du disque.
+   * Ce que tous les simples membres peuvent faire : écrire, envoyer des
+   * vocaux, lancer un appel (propriétaire).
+   */
+  async setPermissions(
+    userId: string,
+    groupId: string,
+    permissions: GroupPermissions,
+  ): Promise<GroupSummary> {
+    await this.require(this.prisma, userId, groupId, 'owner');
+    return this.update(groupId, toStoredGroupPermissions(permissions));
+  }
+
+  /**
+   * Remplace la photo du groupe (`bytes`), ou la retire (`null`).
+   * Propriétaire ; l'ancienne photo est supprimée du disque.
    */
   async setPhoto(
     userId: string,
@@ -182,28 +221,28 @@ export class GroupsService {
     bytes: Buffer | null,
   ): Promise<GroupSummary> {
     // Vérifié avant d'écrire quoi que ce soit sur le disque.
-    const { photo: previous } = await this.requireOwner(
+    const { photo: previous } = await this.require(
       this.prisma,
       userId,
       groupId,
+      'owner',
     );
     const photo = bytes ? await this.groupPhotos.save(bytes) : null;
 
     try {
-      const group = await this.prisma.group.update({
-        where: { id: groupId },
-        data: { photo },
-        include: GROUP_INCLUDE,
-      });
+      const group = await this.update(groupId, { photo });
       await this.groupPhotos.remove(previous);
-      return this.toSummary(group);
+      return group;
     } catch (error) {
       await this.groupPhotos.remove(photo);
       throw error;
     }
   }
 
-  /** Ajoute des amis du propriétaire au groupe (propriétaire uniquement). */
+  /**
+   * Ajoute au groupe des amis de celui qui ajoute (propriétaire ou
+   * administrateur).
+   */
   async addMembers(
     userId: string,
     groupId: string,
@@ -212,12 +251,8 @@ export class GroupsService {
     const friendIds = await this.validFriendIds(userId, memberIds);
 
     const addedIds = await this.prisma.$transaction(async (tx) => {
-      await this.requireOwner(tx, userId, groupId);
-      const current = await tx.groupMember.findMany({
-        where: { groupId },
-        select: { userId: true },
-      });
-      const currentIds = new Set(current.map((member) => member.userId));
+      await this.require(tx, userId, groupId, 'manager');
+      const currentIds = new Set(await memberIdsOf(tx, groupId));
       const newIds = friendIds.filter((id) => !currentIds.has(id));
       if (currentIds.size + newIds.length > GROUP_MAX_MEMBERS) {
         throw new BadRequestException(
@@ -235,8 +270,55 @@ export class GroupsService {
   }
 
   /**
-   * Retire un membre du groupe (propriétaire uniquement, qui ne peut pas se
-   * retirer lui-même : il quitte le groupe). Renvoie les membres restants.
+   * Nomme ou destitue un administrateur, ou règle les restrictions d'un
+   * membre (propriétaire). Un administrateur n'est jamais restreint : le
+   * nommer lève ses restrictions personnelles.
+   */
+  async updateMember(
+    userId: string,
+    groupId: string,
+    memberId: string,
+    { role, permissions }: MemberUpdate,
+  ): Promise<GroupSummary> {
+    if (memberId === userId) {
+      throw new BadRequestException(
+        'Le propriétaire a toujours tous les droits sur son groupe',
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await this.require(tx, userId, groupId, 'owner');
+      const member = await tx.groupMember.findUnique({
+        where: { groupId_userId: { groupId, userId: memberId } },
+        select: { role: true },
+      });
+      if (!member) throw new NotFoundException(NOT_A_MEMBER);
+
+      const nextRole: StoredRole =
+        role === undefined
+          ? member.role
+          : role === 'admin'
+            ? 'ADMIN'
+            : 'MEMBER';
+      if (permissions && nextRole === 'ADMIN') {
+        throw new BadRequestException(
+          "Un administrateur n'est jamais restreint : retirez-lui d'abord ce rôle",
+        );
+      }
+      await tx.groupMember.update({
+        where: { groupId_userId: { groupId, userId: memberId } },
+        data: {
+          role: nextRole,
+          ...(nextRole === 'ADMIN' && toStoredMemberPermissions(ALL_ALLOWED)),
+          ...(permissions && toStoredMemberPermissions(permissions)),
+        },
+      });
+    });
+    return this.get(userId, groupId);
+  }
+
+  /**
+   * Retire un membre du groupe (propriétaire, qui ne peut pas se retirer
+   * lui-même : il quitte le groupe). Renvoie les membres restants.
    */
   async removeMember(
     userId: string,
@@ -247,25 +329,25 @@ export class GroupsService {
       throw new BadRequestException('Pour partir, quittez le groupe');
     }
     return this.prisma.$transaction(async (tx) => {
-      await this.requireOwner(tx, userId, groupId);
+      await this.require(tx, userId, groupId, 'owner');
       const { count } = await tx.groupMember.deleteMany({
         where: { groupId, userId: memberId },
       });
-      if (count === 0) {
-        throw new NotFoundException(
-          'Cette personne ne fait plus partie du groupe',
-        );
-      }
+      if (count === 0) throw new NotFoundException(NOT_A_MEMBER);
       return memberIdsOf(tx, groupId);
     });
   }
 
   /**
-   * Quitte un groupe. Le propriétaire qui part passe la main au membre le
-   * plus ancien ; le dernier à partir supprime le groupe (et sa photo).
-   * Renvoie les membres restants, à prévenir du changement.
+   * Quitte un groupe. Le propriétaire désigne son successeur (`successorId`),
+   * obligatoire tant qu'il reste quelqu'un ; le dernier à partir supprime le
+   * groupe (et sa photo). Renvoie les membres restants, à prévenir.
    */
-  async leave(userId: string, groupId: string): Promise<string[]> {
+  async leave(
+    userId: string,
+    groupId: string,
+    successorId?: string,
+  ): Promise<string[]> {
     const { remaining, deletedPhoto } = await this.prisma.$transaction(
       async (tx) => {
         const group = await tx.group.findFirst({
@@ -282,7 +364,9 @@ export class GroupsService {
           await tx.group.delete({ where: { id: groupId } });
           return { remaining, deletedPhoto: group.photo };
         }
-        if (group.ownerId === userId) await handOver(tx, groupId);
+        if (group.ownerId === userId) {
+          await transferOwnership(tx, groupId, remaining, successorId);
+        }
         return { remaining, deletedPhoto: null };
       },
     );
@@ -291,15 +375,44 @@ export class GroupsService {
     return remaining;
   }
 
-  /** Le groupe, si `userId` en est le propriétaire ; sinon une erreur explicite. */
-  private async requireOwner(db: Db, userId: string, groupId: string) {
-    const group = await db.group.findFirst({
-      where: { id: groupId, members: { some: { userId } } },
-      select: { ownerId: true, photo: true },
+  private async update(
+    groupId: string,
+    data: Prisma.GroupUpdateInput,
+  ): Promise<GroupSummary> {
+    const group = await this.prisma.group.update({
+      where: { id: groupId },
+      data,
+      include: GROUP_INCLUDE,
     });
-    if (!group) throw new NotFoundException(NOT_FOUND);
-    if (group.ownerId !== userId) throw new ForbiddenException(OWNER_ONLY);
-    return group;
+    return this.toSummary(group);
+  }
+
+  /**
+   * Le groupe, si `userId` y a le rôle requis ; sinon une erreur explicite
+   * (introuvable pour qui n'en est pas membre).
+   */
+  private async require(
+    db: Db,
+    userId: string,
+    groupId: string,
+    required: keyof typeof REQUIRED_ROLE,
+  ) {
+    const member = await db.groupMember.findUnique({
+      where: { groupId_userId: { groupId, userId } },
+      select: {
+        userId: true,
+        role: true,
+        group: { select: { ownerId: true, photo: true } },
+      },
+    });
+    if (!member) throw new NotFoundException(NOT_FOUND);
+
+    const { roles, error } = REQUIRED_ROLE[required];
+    const role = roleOf(member.group.ownerId, member);
+    if (!(roles as readonly string[]).includes(role)) {
+      throw new ForbiddenException(error);
+    }
+    return member.group;
   }
 
   /** Amis de `userId` à mettre dans un groupe (sans doublon ni lui-même). */
@@ -309,7 +422,7 @@ export class GroupsService {
       throw new BadRequestException('Choisissez au moins un ami');
     }
     if (!(await this.friendsService.areAllFriends(userId, friendIds))) {
-      throw new BadRequestException('Un groupe ne peut réunir que vos amis');
+      throw new BadRequestException('Vous ne pouvez ajouter que vos amis');
     }
     return friendIds;
   }
@@ -321,7 +434,12 @@ export class GroupsService {
       photoUrl: GroupPhotosService.url(group.photo),
       ownerId: group.ownerId,
       createdAt: group.createdAt.toISOString(),
-      members: group.members.map((member) => member.user),
+      members: group.members.map((member) => ({
+        ...member.user,
+        role: roleOf(group.ownerId, member),
+        permissions: memberPermissions(member),
+      })),
+      permissions: groupPermissions(group),
       call: this.ongoingCalls.get(groupKey(group.id)),
     };
   }
@@ -337,13 +455,52 @@ async function memberIdsOf(db: Db, groupId: string): Promise<string[]> {
   return members.map((member) => member.userId);
 }
 
-/** Le membre le plus ancien devient propriétaire du groupe. */
-async function handOver(db: Db, groupId: string) {
-  const [successor] = await memberIdsOf(db, groupId);
-  if (successor) {
-    await db.group.update({
-      where: { id: groupId },
-      data: { ownerId: successor },
-    });
+/**
+ * Le propriétaire part : `successorId`, l'un des membres restants, prend sa
+ * place. Devenu propriétaire, il n'a plus besoin d'un rôle ni de restrictions.
+ */
+async function transferOwnership(
+  db: Db,
+  groupId: string,
+  remainingIds: string[],
+  successorId: string | undefined,
+) {
+  if (!successorId) {
+    throw new BadRequestException(
+      'Choisissez le nouveau propriétaire du groupe avant de partir',
+    );
   }
+  if (!remainingIds.includes(successorId)) {
+    throw new BadRequestException(
+      'Le nouveau propriétaire doit faire partie du groupe',
+    );
+  }
+  await makeOwner(db, groupId, successorId);
+}
+
+/**
+ * Le propriétaire a disparu sans choisir (compte supprimé) : son plus ancien
+ * administrateur lui succède, à défaut le membre le plus ancien.
+ */
+async function appointSuccessor(db: Db, groupId: string) {
+  const successor =
+    (await db.groupMember.findFirst({
+      where: { groupId, role: 'ADMIN' },
+      select: { userId: true },
+      orderBy: BY_SENIORITY,
+    })) ??
+    (await db.groupMember.findFirst({
+      where: { groupId },
+      select: { userId: true },
+      orderBy: BY_SENIORITY,
+    }));
+  if (successor) await makeOwner(db, groupId, successor.userId);
+}
+
+async function makeOwner(db: Db, groupId: string, userId: string) {
+  await db.group.update({ where: { id: groupId }, data: { ownerId: userId } });
+  await db.groupMember.update({
+    where: { groupId_userId: { groupId, userId } },
+    data: { role: 'MEMBER', ...toStoredMemberPermissions(ALL_ALLOWED) },
+  });
 }

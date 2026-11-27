@@ -16,6 +16,8 @@ import { isReactionEmoji } from '../chat/chat.constants';
 import { ChatService } from '../chat/chat.service';
 import type { ServerToClientEvents, SocketData } from '../chat/chat.types';
 import { CLIENT_ORIGIN } from '../config';
+import { ConversationAccessService } from '../social/conversation-access.service';
+import { restrictionError } from '../social/group-rights';
 import { OngoingCallsService } from '../social/ongoing-calls.service';
 import {
   CallService,
@@ -55,7 +57,8 @@ function parseMedia(value: unknown): CallMedia {
  *   (sinon il s'arrête après {@link RING_TIMEOUT_MS}), et prend fin pour les
  *   deux dès que l'un raccroche.
  * - En groupe : un direct ouvert, que chacun rejoint ou quitte librement ;
- *   le dernier à partir le clôt.
+ *   le dernier à partir le clôt. Le lancer peut être réservé aux
+ *   administrateurs par le propriétaire ; le rejoindre, jamais.
  */
 @WebSocketGateway({ cors: { origin: CLIENT_ORIGIN, credentials: true } })
 export class CallGateway
@@ -76,6 +79,7 @@ export class CallGateway
     private readonly callService: CallService,
     private readonly chatService: ChatService,
     private readonly ongoingCalls: OngoingCallsService,
+    private readonly conversationAccess: ConversationAccessService,
   ) {}
 
   /** Refus venus de l'accueil (la sonnerie hors de la conversation). */
@@ -102,11 +106,14 @@ export class CallGateway
 
   /** Lance l'appel ou y entre ; la réponse liste les participants à qui se connecter. */
   @SubscribeMessage('call:join')
-  handleJoin(
+  async handleJoin(
     @ConnectedSocket() client: CallSocket,
     @MessageBody() media: unknown,
-  ): CallJoinAck {
+  ): Promise<CallJoinAck> {
     const { user, conversation } = client.data;
+    const startError = await this.startError(client);
+    if (startError) return { ok: false, error: startError };
+
     const room = this.callService.room(conversation);
     const error = this.joinError(room, client);
     if (error) {
@@ -174,6 +181,20 @@ export class CallGateway
     if (!room?.has(client.id) || !isReactionEmoji(emoji)) return;
     const peerIds = room.list().map((item) => item.peerId);
     this.server.to(peerIds).emit('call:reaction', { peerId: client.id, emoji });
+  }
+
+  /**
+   * Lancer un appel (personne n'y est encore) exige d'en avoir le droit, relu
+   * en base ; rejoindre un appel en cours, seulement d'être membre.
+   */
+  private async startError(client: CallSocket): Promise<string | null> {
+    const { user, conversation } = client.data;
+    const ongoing = this.callService.find(conversation.key);
+    if (ongoing && ongoing.list().length > 0) return null;
+
+    const rights = await this.conversationAccess.rights(user.id, conversation);
+    if (!rights) return "Vous n'avez plus accès à cette conversation";
+    return restrictionError(rights, ['call']);
   }
 
   /** Pourquoi cette connexion ne peut pas entrer dans l'appel ; `null` si elle le peut. */

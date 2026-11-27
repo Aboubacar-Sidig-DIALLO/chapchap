@@ -6,6 +6,7 @@ const direct: Conversation = {
   type: 'direct',
   title: 'Bob',
   photoUrl: null,
+  rightsByUser: {},
   memberIds: ['ana', 'bob'],
   friendId: 'bob',
 };
@@ -14,6 +15,7 @@ const group: Conversation = {
   type: 'group',
   title: 'Café',
   photoUrl: null,
+  rightsByUser: {},
   memberIds: ['ana', 'bob', 'cleo'],
   groupId: 'g1',
 };

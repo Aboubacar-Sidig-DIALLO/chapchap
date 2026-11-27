@@ -9,6 +9,7 @@ const group: Conversation = {
   type: 'group',
   title: 'Café',
   photoUrl: null,
+  rightsByUser: {},
   memberIds: ['ana', 'bob', 'cleo'],
   groupId: 'g1',
 };

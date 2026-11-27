@@ -1,4 +1,5 @@
 import { MESSAGE_TTL_MS, type ReactionEmoji } from './chat.constants';
+import type { Attachment } from '../attachments/attachment.types';
 import type {
   ChatMessage,
   ChatUser,
@@ -112,7 +113,7 @@ export class ConversationStore {
     emoji: ReactionEmoji | null,
   ): Reaction[] | null {
     const message = this.messages.find((item) => item.id === messageId);
-    if (!message) return null;
+    if (!message || message.deletedBy) return null;
 
     const current = message.reactions.find((item) => item.user.id === user.id);
     if ((current?.emoji ?? null) === emoji) return null;
@@ -120,6 +121,28 @@ export class ConversationStore {
     const others = message.reactions.filter((item) => item.user.id !== user.id);
     message.reactions = emoji ? [...others, { user, emoji }] : others;
     return message.reactions;
+  }
+
+  /**
+   * Supprime un message pour tout le monde (modération) : il ne garde que la
+   * mention de qui l'a supprimé. Renvoie ses pièces jointes, à effacer du
+   * disque ; `null` si le message n'existe pas, est déjà supprimé ou est
+   * la trace d'un appel.
+   */
+  deleteMessage(messageId: string, by: ChatUser): Attachment[] | null {
+    const message = this.messages.find((item) => item.id === messageId);
+    if (!message || message.deletedBy || message.call) return null;
+
+    const { attachments } = message;
+    Object.assign(message, {
+      content: '',
+      attachments: [],
+      reactions: [],
+      listenedBy: [],
+      listenProgress: [],
+      deletedBy: by,
+    } satisfies Partial<ChatMessage>);
+    return attachments;
   }
 
   /** Vrai si `user` peut signaler l'écoute en cours de ce message (un vocal d'un autre). */

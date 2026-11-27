@@ -207,6 +207,18 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Efface tout de suite des pièces jointes (message supprimé) : métadonnées et fichiers. */
+  async discard(attachments: Attachment[]) {
+    for (const { id } of attachments) {
+      const stored = this.attachments.get(id);
+      if (!stored) continue;
+      this.attachments.delete(id);
+      await rm(stored.path, { force: true }).catch((error: unknown) =>
+        this.logger.error(`Suppression impossible de ${id} : ${String(error)}`),
+      );
+    }
+  }
+
   /** Supprime les pièces jointes expirées : métadonnées et fichiers. */
   async removeExpired(now = Date.now()) {
     const expired = [...this.attachments].filter(

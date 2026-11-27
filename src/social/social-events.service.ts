@@ -20,8 +20,8 @@ export class SocialEvents {
   readonly accessRevoked$ = this.accessRevokedSubject.asObservable();
 
   /**
-   * Nom, photo ou membres d'un groupe (son identifiant) ont changé : ses
-   * conversations ouvertes se mettent à jour.
+   * Nom, photo, membres ou droits d'un groupe (son identifiant) ont changé :
+   * ses conversations ouvertes se mettent à jour.
    */
   readonly groupUpdated$ = this.groupUpdatedSubject.asObservable();
 

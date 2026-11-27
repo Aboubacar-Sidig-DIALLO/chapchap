@@ -17,6 +17,25 @@ function send(store: ConversationStore, id: string) {
 }
 
 describe('ConversationStore (messages éphémères)', () => {
+  it('supprime un message pour tous en ne gardant que la mention du modérateur', () => {
+    const store = new ConversationStore();
+    const moderator = { id: 'bob', name: 'Bob' };
+    send(store, 'm1');
+    store.setReaction('m1', moderator, '❤️');
+
+    expect(store.deleteMessage('m1', moderator)).toEqual([]);
+    expect(store.getHistory()[0]).toMatchObject({
+      content: '',
+      attachments: [],
+      reactions: [],
+      deletedBy: moderator,
+    });
+    // Déjà supprimé : plus rien à faire, ni réaction possible.
+    expect(store.deleteMessage('m1', moderator)).toBeNull();
+    expect(store.setReaction('m1', alice, '❤️')).toBeNull();
+    expect(store.deleteMessage('inconnu', moderator)).toBeNull();
+  });
+
   it('fixe la fin de vie d’un message une heure après son envoi', () => {
     const message = send(new ConversationStore(), 'm1');
     expect(Date.parse(message.expiresAt) - sentAt).toBe(MESSAGE_TTL_MS);

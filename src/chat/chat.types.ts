@@ -7,7 +7,10 @@ import type {
 } from '../call/call.types';
 import type { AuthSocketData } from '../auth/socket-auth';
 import type { Conversation } from '../social/conversation-access.service';
-import type { PresenceChange } from '../social/social.types';
+import type {
+  ConversationRights,
+  PresenceChange,
+} from '../social/social.types';
 import type { ReactionEmoji } from './chat.constants';
 
 export interface ChatUser {
@@ -38,7 +41,19 @@ export interface ChatMessage {
    * client), au nom de celui qui l'avait lancé.
    */
   call?: CallSummary;
+  /**
+   * Supprimé par un modérateur du groupe (propriétaire ou administrateur) :
+   * contenu, pièces jointes et réactions effacés, seule reste la mention.
+   */
+  deletedBy?: ChatUser;
 }
+
+export interface MessageDeletedEvent {
+  messageId: string;
+  deletedBy: ChatUser;
+}
+
+export type DeleteMessageAck = { ok: true } | { ok: false; error: string };
 
 export interface Reaction {
   user: ChatUser;
@@ -110,12 +125,14 @@ export interface ConversationInfo {
   title: string;
   /** Photo du groupe (adresse relative à l'API) ; `null` sinon. */
   photoUrl: string | null;
+  /** Ce que l'utilisateur peut y faire (écrire, parler, appeler, modérer). */
+  rights: ConversationRights;
 }
 
 export interface ServerToClientEvents {
   /** Conversation ouverte (accès vérifié), juste avant son historique. */
   'conversation:ready': (conversation: ConversationInfo) => void;
-  /** Le groupe a changé de nom ou de photo. */
+  /** Le groupe a changé : nom, photo, ou vos droits. */
   'conversation:updated': (conversation: ConversationInfo) => void;
   /** Accès retiré (ami retiré, groupe quitté) : la connexion va être fermée. */
   'conversation:closed': () => void;
@@ -123,6 +140,8 @@ export interface ServerToClientEvents {
   'session:ended': () => void;
   'chat:history': (messages: ChatMessage[]) => void;
   'message:new': (message: ChatMessage) => void;
+  /** Un modérateur a supprimé un message (diffusé à tous). */
+  'message:deleted': (event: MessageDeletedEvent) => void;
   /** Groupe : qui a la conversation ouverte en ce moment. */
   'users:online': (users: ChatUser[]) => void;
   /**

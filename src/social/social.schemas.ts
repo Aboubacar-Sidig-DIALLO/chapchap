@@ -49,3 +49,37 @@ export type RenameGroupInput = z.infer<typeof renameGroupSchema>;
 export const addGroupMembersSchema = z.object({ memberIds: memberIdsSchema });
 
 export type AddGroupMembersInput = z.infer<typeof addGroupMembersSchema>;
+
+/** Écrire, envoyer des vocaux, lancer un appel : chaque action, permise ou non. */
+const permissionsSchema = z.object(
+  {
+    write: z.boolean(),
+    voice: z.boolean(),
+    call: z.boolean(),
+  },
+  { error: 'Autorisations invalides' },
+);
+
+export const groupPermissionsSchema = permissionsSchema;
+
+export type GroupPermissionsInput = z.infer<typeof groupPermissionsSchema>;
+
+/** Rôle d'un membre, ou ses restrictions personnelles (au moins l'un des deux). */
+export const updateGroupMemberSchema = z
+  .object({
+    role: z.enum(['admin', 'member']).optional(),
+    permissions: permissionsSchema.optional(),
+  })
+  .refine((input) => input.role !== undefined || input.permissions, {
+    error: 'Rien à modifier',
+  });
+
+export type UpdateGroupMemberInput = z.infer<typeof updateGroupMemberSchema>;
+
+/** Le propriétaire qui part désigne son successeur. */
+export const leaveGroupSchema = z
+  .object({ successorId: idSchema.optional() })
+  // Requête sans corps : un simple membre n'a personne à désigner.
+  .default({});
+
+export type LeaveGroupInput = z.infer<typeof leaveGroupSchema>;

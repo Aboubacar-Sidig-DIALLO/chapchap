@@ -59,17 +59,52 @@ export interface FriendsOverview {
   outgoing: PublicUser[];
 }
 
+/**
+ * Rôle dans un groupe. Le propriétaire a tous les droits ; les
+ * administrateurs ajoutent des membres et suppriment des messages ; aucun
+ * des deux n'est jamais restreint.
+ */
+export type GroupRole = 'owner' | 'admin' | 'member';
+
+/** Ce que le propriétaire peut retirer aux membres : écrire, envoyer des vocaux, lancer un appel. */
+export type GroupAction = 'write' | 'voice' | 'call';
+
+/** Pour chaque action : permise ou non. */
+export type GroupPermissions = Record<GroupAction, boolean>;
+
+/**
+ * Pourquoi une action est interdite : réservée aux administrateurs pour tout
+ * le groupe (`group`), ou retirée à ce membre en particulier (`personal`).
+ */
+export type Restriction = 'group' | 'personal';
+
+/** Ce qu'un utilisateur peut faire dans une conversation. */
+export interface ConversationRights {
+  /** Supprimer n'importe quel message (propriétaire et administrateurs d'un groupe). */
+  moderate: boolean;
+  /** Pour chaque action : `null` si elle est permise, sinon pourquoi elle ne l'est pas. */
+  restrictions: Record<GroupAction, Restriction | null>;
+}
+
+export interface GroupMemberSummary extends PublicUser {
+  role: GroupRole;
+  /** Restrictions propres à ce membre (sans effet sur le propriétaire et les administrateurs). */
+  permissions: GroupPermissions;
+}
+
 export interface GroupSummary {
   id: string;
   name: string;
   /** Adresse de la photo, relative à l'API ; `null` sans photo. */
   photoUrl: string | null;
-  /** Celui qui administre le groupe (nom, photo, membres) ; au départ, son créateur. */
+  /** Celui qui administre le groupe ; au départ, son créateur. */
   ownerId: string | null;
   /** Date ISO 8601. */
   createdAt: string;
   /** Par ordre d'arrivée. */
-  members: PublicUser[];
+  members: GroupMemberSummary[];
+  /** Ce que tous les simples membres peuvent faire. */
+  permissions: GroupPermissions;
   /** Appel en cours dans le groupe, visible sans y entrer. */
   call: OngoingCall | null;
 }

@@ -22,7 +22,13 @@ import {
   directKeyMembers,
   groupKey,
   parseConversationRef,
+  rightsIn,
 } from '../social/conversation-access.service';
+import {
+  actionsOfMessage,
+  DIRECT_RIGHTS,
+  restrictionError,
+} from '../social/group-rights';
 import {
   type AccessRevoked,
   SocialEvents,
@@ -37,6 +43,7 @@ import type { ConversationStore } from './conversation-store';
 import type {
   ChatMessage,
   ConversationInfo,
+  DeleteMessageAck,
   SendMessageAck,
   SendMessagePayload,
   ServerToClientEvents,
@@ -59,10 +66,16 @@ type ChatSocket = Socket<
   SocketData
 >;
 
-/** Ce que le client sait de sa conversation. */
-function conversationInfo(conversation: Conversation): ConversationInfo {
+const NO_ACCESS = "Vous n'avez plus accès à cette conversation";
+
+/** Ce que le client sait de sa conversation, dont ses propres droits. */
+function conversationInfo(
+  conversation: Conversation,
+  userId: string,
+): ConversationInfo {
   const { type, title, photoUrl } = conversation;
-  return { type, title, photoUrl };
+  const rights = rightsIn(conversation, userId) ?? DIRECT_RIGHTS;
+  return { type, title, photoUrl, rights };
 }
 
 function isUserActivity(value: unknown): value is UserActivity {
@@ -148,7 +161,7 @@ export class ChatGateway
     this.presence.connected(user.id);
 
     const store = this.chatService.conversation(conversation.key);
-    client.emit('conversation:ready', conversationInfo(conversation));
+    client.emit('conversation:ready', conversationInfo(conversation, user.id));
     client.emit('chat:history', store.getHistory());
     client.emit('receipts:update', store.getReceipts());
     this.broadcastOnlineUsers(conversation.key);
@@ -200,13 +213,15 @@ export class ChatGateway
       return { ok: false, error: 'Message vide' };
     }
 
-    // L'amitié ou l'appartenance au groupe a pu prendre fin depuis la connexion.
-    if (!(await this.conversationAccess.canAccess(user.id, conversation))) {
-      return {
-        ok: false,
-        error: "Vous n'avez plus accès à cette conversation",
-      };
-    }
+    // L'amitié, l'appartenance au groupe ou une autorisation a pu changer
+    // depuis la connexion : les droits sont relus à chaque envoi.
+    const rights = await this.conversationAccess.rights(user.id, conversation);
+    if (!rights) return { ok: false, error: NO_ACCESS };
+    const restricted = restrictionError(
+      rights,
+      actionsOfMessage(content, attachments),
+    );
+    if (restricted) return { ok: false, error: restricted };
 
     const { message, isNew } = this.chatService
       .conversation(conversation.key)
@@ -227,16 +242,61 @@ export class ChatGateway
     return { ok: true, message };
   }
 
-  /** Le participant écrit (`typing`), enregistre un vocal (`recording`) ou s'arrête (`null`). */
+  /**
+   * Le participant écrit (`typing`), enregistre un vocal (`recording`) ou
+   * s'arrête (`null`). Ce qu'il n'a pas le droit d'envoyer n'est pas annoncé.
+   */
   @SubscribeMessage('activity')
   handleActivity(
     @ConnectedSocket() client: ChatSocket,
     @MessageBody() activity: unknown,
   ) {
-    client.to(client.data.conversation.key).emit('activity', {
-      user: client.data.user,
-      activity: isUserActivity(activity) ? activity : null,
+    const { user, conversation } = client.data;
+    const restrictions = rightsIn(conversation, user.id)?.restrictions;
+    const isAllowed =
+      isUserActivity(activity) &&
+      !restrictions?.[activity === 'typing' ? 'write' : 'voice'];
+
+    client.to(conversation.key).emit('activity', {
+      user,
+      activity: isAllowed ? activity : null,
     });
+  }
+
+  /**
+   * Supprime un message pour tout le monde : réservé au propriétaire et aux
+   * administrateurs d'un groupe (droits relus en base). Ses fichiers sont
+   * effacés aussitôt.
+   */
+  @SubscribeMessage('message:delete')
+  async handleDelete(
+    @ConnectedSocket() client: ChatSocket,
+    @MessageBody() messageId: unknown,
+  ): Promise<DeleteMessageAck> {
+    const { user, conversation } = client.data;
+    if (typeof messageId !== 'string') {
+      return { ok: false, error: 'Message invalide' };
+    }
+
+    const rights = await this.conversationAccess.rights(user.id, conversation);
+    if (!rights) return { ok: false, error: NO_ACCESS };
+    if (!rights.moderate) {
+      return {
+        ok: false,
+        error:
+          'Seuls le propriétaire et les administrateurs du groupe peuvent supprimer un message',
+      };
+    }
+
+    const attachments = this.store(client).deleteMessage(messageId, user);
+    if (!attachments) {
+      return { ok: false, error: 'Ce message a déjà disparu' };
+    }
+    void this.attachmentsService.discard(attachments);
+    this.server
+      .to(conversation.key)
+      .emit('message:deleted', { messageId, deletedBy: user });
+    return { ok: true };
   }
 
   /** Le participant a écouté un message vocal ; diffusé à tous (dont ses autres onglets). */
@@ -422,8 +482,9 @@ export class ChatGateway
   }
 
   /**
-   * Le groupe a changé : ses connexions ouvertes reprennent son nom, sa photo
-   * et ses membres (à qui sont signalés les nouveaux messages).
+   * Le groupe a changé : ses connexions ouvertes reprennent son nom, sa
+   * photo, ses membres (à qui sont signalés les nouveaux messages) et les
+   * droits de chacun, que son interface applique aussitôt.
    */
   private async refreshGroupConversation(groupId: string) {
     const key = groupKey(groupId);
@@ -432,10 +493,13 @@ export class ChatGateway
 
     const conversation = await this.conversationAccess.group(groupId);
     if (!conversation) return;
-    for (const socket of sockets) socket.data.conversation = conversation;
-    this.server
-      .to(key)
-      .emit('conversation:updated', conversationInfo(conversation));
+    for (const socket of sockets) {
+      socket.data.conversation = conversation;
+      socket.emit(
+        'conversation:updated',
+        conversationInfo(conversation, socket.data.user.id),
+      );
+    }
   }
 
   /** Conversation privée : où en est l'ami (en ligne, hors ligne depuis…). */

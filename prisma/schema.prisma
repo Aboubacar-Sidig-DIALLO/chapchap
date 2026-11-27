@@ -124,7 +124,7 @@ model Friendship {
 }
 
 /// Groupe d'amis. Son propriétaire (au départ, celui qui l'a créé) l'administre :
-/// nom, photo, membres. S'il le quitte, le membre le plus ancien prend le relais.
+/// nom, photo, membres, rôles et autorisations. Pour partir, il désigne son successeur.
 model Group {
   id        String        @id @default(cuid())
   name      String
@@ -136,14 +136,33 @@ model Group {
   createdAt DateTime      @default(now())
   members   GroupMember[]
 
+  /// Ce que les simples membres peuvent faire (propriétaire et administrateurs : toujours tout).
+  membersCanWrite     Boolean @default(true)
+  membersCanSendVoice Boolean @default(true)
+  membersCanCall      Boolean @default(true)
+
   @@map("friend_group")
+}
+
+/// Rôle d'un membre ; le propriétaire, lui, est désigné par `Group.ownerId`.
+enum GroupRole {
+  MEMBER
+  /// Ajoute des membres et supprime des messages, par délégation du propriétaire.
+  ADMIN
 }
 
 /// Lien entre un utilisateur et un groupe d'amis.
 model GroupMember {
   groupId  String
   userId   String
-  joinedAt DateTime @default(now())
+  joinedAt DateTime  @default(now())
+  role     GroupRole @default(MEMBER)
+
+  /// Restrictions propres à ce membre, en plus de celles du groupe (sans effet sur un administrateur).
+  canWrite     Boolean @default(true)
+  canSendVoice Boolean @default(true)
+  canCall      Boolean @default(true)
+
   group    Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
