@@ -49,3 +49,17 @@ export interface CallReaction {
 
 export type CallJoinAck =
   { ok: true; participants: CallParticipant[] } | { ok: false; error: string };
+
+/** Événements de l'appel reçus par tous ses participants, membres comme invités. */
+export interface CallServerEvents {
+  'call:participants': (participants: CallParticipant[]) => void;
+  'call:ended': () => void;
+  'call:signal': (signal: CallSignal) => void;
+  'call:reaction': (reaction: CallReaction) => void;
+}
+
+/** Espace `/call-guests` : un invité peut, en plus, être retiré de l'appel. */
+export interface GuestServerEvents extends CallServerEvents {
+  /** Un administrateur vous a retiré de l'appel : la connexion va se fermer. */
+  'call:removed': () => void;
+}

@@ -47,6 +47,19 @@ export class CallRoom {
     return this.participants.has(peerId);
   }
 
+  get(peerId: string): CallParticipant | undefined {
+    return this.participants.get(peerId);
+  }
+
+  /** Au moins un membre de la conversation est là : sans eux, les invités ne restent pas. */
+  hasMembers(): boolean {
+    return this.list().some((participant) => !participant.user.isGuest);
+  }
+
+  guestCount(): number {
+    return this.list().filter((participant) => participant.user.isGuest).length;
+  }
+
   hasUser(userId: string): boolean {
     return this.list().some((participant) => participant.user.id === userId);
   }

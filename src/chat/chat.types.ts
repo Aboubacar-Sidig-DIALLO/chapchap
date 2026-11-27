@@ -24,6 +24,11 @@ import type { ReactionEmoji } from './chat.constants';
 export interface ChatUser {
   id: string;
   name: string;
+  /**
+   * Invité d'un appel de groupe, sans compte : présent le temps de l'appel
+   * seulement (jamais auteur d'un message).
+   */
+  isGuest?: boolean;
 }
 
 export interface ChatMessage {
