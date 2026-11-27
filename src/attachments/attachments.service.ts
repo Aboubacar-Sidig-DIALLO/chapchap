@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -28,6 +29,18 @@ interface StoredAttachment {
   /** Emplacement du fichier sur le disque. */
   path: string;
   /** Horodatage (ms) à partir duquel le fichier est supprimé. */
+  expiresAt: number;
+  /**
+   * Joint à un message à vue unique : plus jamais servi par son adresse
+   * publique, seulement par un ticket remis à l'ouverture.
+   */
+  sealed?: boolean;
+}
+
+/** Droit, pour un utilisateur, de télécharger une pièce jointe à vue unique, brièvement. */
+interface Ticket {
+  attachmentId: string;
+  userId: string;
   expiresAt: number;
 }
 
@@ -135,6 +148,7 @@ const STORED_FILE_NAME =
 export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('Attachments');
   private readonly attachments = new Map<string, StoredAttachment>();
+  private readonly tickets = new Map<string, Ticket>();
   private cleanupTimer?: NodeJS.Timeout;
 
   /**
@@ -185,12 +199,22 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     return stored && stored.expiresAt > Date.now() ? stored : undefined;
   }
 
-  /** Résout les ids envoyés par le client ; `null` si l'un d'eux est inconnu ou expiré. */
+  /** La pièce jointe servie par son adresse publique : ni expirée, ni à vue unique. */
+  findPublic(id: string): StoredAttachment | undefined {
+    const stored = this.find(id);
+    return stored?.sealed ? undefined : stored;
+  }
+
+  /**
+   * Résout les ids envoyés par le client ; `null` si l'un d'eux est inconnu,
+   * expiré, ou déjà scellé dans un message à vue unique (qu'on ne pourrait
+   * pas, ainsi, faire réapparaître ailleurs).
+   */
   resolve(ids: unknown[]): Attachment[] | null {
     const attachments: Attachment[] = [];
 
     for (const id of new Set(ids)) {
-      const stored = typeof id === 'string' ? this.find(id) : undefined;
+      const stored = typeof id === 'string' ? this.findPublic(id) : undefined;
       if (!stored) return null;
       attachments.push(stored.attachment);
     }
@@ -207,6 +231,49 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Joint à un message à vue unique : l'adresse publique ne le sert plus. */
+  seal(attachments: Attachment[]) {
+    for (const { id } of attachments) {
+      const stored = this.attachments.get(id);
+      if (stored) stored.sealed = true;
+    }
+  }
+
+  /**
+   * Un ticket pour télécharger une pièce jointe à vue unique : aléatoire,
+   * réservé à `userId`, valable `ttlMs`. Il tient lieu d'adresse.
+   */
+  issueTicket(attachmentId: string, userId: string, ttlMs: number): string {
+    const token = randomBytes(32).toString('base64url');
+    this.tickets.set(token, {
+      attachmentId,
+      userId,
+      expiresAt: Date.now() + ttlMs,
+    });
+    return token;
+  }
+
+  /** La pièce jointe d'un ticket encore valable, présenté par celui à qui il a été remis. */
+  redeem(token: string, userId: string): StoredAttachment | undefined {
+    const ticket = this.tickets.get(token);
+    if (!ticket || ticket.userId !== userId || ticket.expiresAt <= Date.now()) {
+      return undefined;
+    }
+    return this.find(ticket.attachmentId);
+  }
+
+  /**
+   * Avance l'effacement de pièces jointes à dans `delayMs` au plus : le
+   * temps de finir les téléchargements en cours, pas davantage.
+   */
+  expireSoon(attachments: Attachment[], delayMs: number) {
+    const until = Date.now() + delayMs;
+    for (const { id } of attachments) {
+      const stored = this.attachments.get(id);
+      if (stored) stored.expiresAt = Math.min(stored.expiresAt, until);
+    }
+  }
+
   /** Efface tout de suite des pièces jointes (message supprimé) : métadonnées et fichiers. */
   async discard(attachments: Attachment[]) {
     for (const { id } of attachments) {
@@ -219,8 +286,12 @@ export class AttachmentsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Supprime les pièces jointes expirées : métadonnées et fichiers. */
+  /** Supprime les pièces jointes et les tickets expirés : métadonnées et fichiers. */
   async removeExpired(now = Date.now()) {
+    for (const [token, ticket] of this.tickets) {
+      if (ticket.expiresAt <= now) this.tickets.delete(token);
+    }
+
     const expired = [...this.attachments].filter(
       ([, stored]) => stored.expiresAt <= now,
     );

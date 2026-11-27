@@ -54,7 +54,10 @@ import type {
   ServerToClientEvents,
   SocketData,
   UserActivity,
+  ViewOnceFile,
+  ViewOnceOpenAck,
 } from './chat.types';
+import { VIEW_ONCE_TICKET_TTL_MS, viewOnceKind } from './view-once';
 
 const MAX_MESSAGE_LENGTH = 2000;
 
@@ -226,11 +229,26 @@ export class ChatGateway
       ? payload.attachmentIds
       : [];
 
+    const viewOnce = payload?.viewOnce === true;
+
     if (typeof payload?.id !== 'string') {
       return { ok: false, error: 'Message invalide' };
     }
+    // Renvoi d'un message déjà reçu (réponse perdue) : on le confirme tel quel.
+    const existing = this.store(client).find(payload.id);
+    if (existing) {
+      return existing.author.id === user.id
+        ? { ok: true, message: existing }
+        : { ok: false, error: 'Message invalide' };
+    }
     if (content.length > MAX_MESSAGE_LENGTH) {
       return { ok: false, error: 'Message trop long' };
+    }
+    if (viewOnce && (content || attachmentIds.length === 0)) {
+      return {
+        ok: false,
+        error: 'Un message à vue unique ne contient que des pièces jointes',
+      };
     }
     if (attachmentIds.length > MAX_ATTACHMENTS_PER_MESSAGE) {
       return { ok: false, error: 'Trop de pièces jointes' };
@@ -254,18 +272,20 @@ export class ChatGateway
     );
     if (restricted) return { ok: false, error: restricted };
 
-    const { message, isNew } = this.chatService
-      .conversation(conversation.key)
-      .addMessage({
+    const { message, isNew } = this.store(client).addMessage(
+      {
         id: payload.id,
         author: user,
         content,
         attachments,
         createdAt: new Date().toISOString(),
-      });
+      },
+      viewOnce ? { viewOnceFor: recipientsOf(conversation, user.id) } : {},
+    );
 
     if (isNew) {
       this.attachmentsService.keepUntil(attachments, message.expiresAt);
+      if (viewOnce) this.attachmentsService.seal(attachments);
       client.to(conversation.key).emit('message:new', message);
       this.notifyMembers(client, message);
     }
@@ -432,6 +452,49 @@ export class ChatGateway
       .emit('message:deleted', { messageId, deletedBy: user });
     this.notifyRemoved(client, messageId, deleted.author.id);
     return { ok: true };
+  }
+
+  /**
+   * Un destinataire ouvre un message à vue unique, une fois : il reçoit, à
+   * lui seul, de quoi télécharger ses pièces jointes pendant une minute.
+   * Tous l'ont ouvert : les fichiers sont effacés sitôt ce délai passé.
+   */
+  @SubscribeMessage('view-once:open')
+  async handleOpenViewOnce(
+    @ConnectedSocket() client: ChatSocket,
+    @MessageBody() messageId: unknown,
+  ): Promise<ViewOnceOpenAck> {
+    if (typeof messageId !== 'string') {
+      return { ok: false, error: 'Message invalide' };
+    }
+    const { user, conversation } = client.data;
+    const rights = await this.conversationAccess.rights(user.id, conversation);
+    if (!rights) return { ok: false, error: NO_ACCESS };
+
+    const opening = this.store(client).openViewOnce(messageId, user);
+    if (!opening.ok) return opening;
+
+    const files = opening.attachments.map((attachment): ViewOnceFile => ({
+      kind: viewOnceKind(attachment),
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      url: `/attachments/once/${this.attachmentsService.issueTicket(
+        attachment.id,
+        user.id,
+        VIEW_ONCE_TICKET_TTL_MS,
+      )}`,
+      ...(attachment.voice && { voice: attachment.voice }),
+    }));
+    if (opening.isExhausted) {
+      this.attachmentsService.expireSoon(
+        opening.attachments,
+        VIEW_ONCE_TICKET_TTL_MS,
+      );
+    }
+    this.server
+      .to(conversation.key)
+      .emit('view-once:opened', { messageId, user });
+    return { ok: true, files };
   }
 
   /** Le participant a écouté un message vocal ; diffusé à tous (dont ses autres onglets). */

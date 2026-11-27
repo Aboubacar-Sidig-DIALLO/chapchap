@@ -12,6 +12,7 @@ Backend NestJS de **chapchap**, une messagerie « la voix d'abord » : salon de 
 - **Direct** (appel audio / vidéo) : signalisation WebRTC, réactions en direct, trace de l'appel déposée dans la conversation à la fin.
 - **Notifications push** (PWA) : messages, appels et demandes d'amis arrivent même application fermée, sans jamais le contenu des messages (« 🎙️ Message vocal · 0:42 »). Seuls les services push des navigateurs sont acceptés comme destination ; les abonnements morts sont effacés, ceux d'un compte aussi quand toutes ses sessions sont fermées.
 - **Talkie-walkie** : en maintenant le micro, la voix est relayée en direct (PCM 16 kHz) à ceux qui ont la conversation ouverte, une voix à la fois. Le même enregistrement part ensuite comme vocal (même id) : les absents le reçoivent, les auditeurs du direct le voient déjà « écouté ». Rien n'est conservé ; droits, débit et durée sont vérifiés par le serveur.
+- **Vue unique** : un vocal, une photo, une vidéo ou un fichier que chaque destinataire n'ouvre qu'une fois. Le message n'en diffuse que l'annonce (« Vocal · 0:12 ») ; le fichier, scellé, n'est plus servi par son adresse publique. À l'ouverture (`view-once:open`), le serveur remet un ticket aléatoire, valable une minute, pour ce seul utilisateur et sa session (`GET /attachments/once/:ticket`, sans cache) ; le client le garde en mémoire le temps de l'affichage. Quand tous les destinataires l'ont ouvert, les fichiers sont effacés dans la minute ; l'auteur voit qui l'a ouvert, les autres une simple trace (« Photo vue »).
 
 ## Démarrage
 

@@ -6,6 +6,7 @@ import type {
   Reaction,
   ReadReceipt,
 } from './chat.types';
+import { toViewOnceItem } from './view-once';
 
 const HISTORY_LIMIT = 200;
 
@@ -19,8 +20,31 @@ const ALREADY_SEEN =
 
 export type NewMessage = Omit<
   ChatMessage,
-  'seq' | 'expiresAt' | 'listenedBy' | 'listenProgress' | 'reactions'
+  | 'seq'
+  | 'expiresAt'
+  | 'listenedBy'
+  | 'listenProgress'
+  | 'reactions'
+  | 'viewOnce'
 >;
+
+/** Ce que le serveur garde pour lui d'un message à vue unique. */
+interface ViewOnceSecret {
+  /** Les vraies pièces jointes, jamais diffusées. */
+  attachments: Attachment[];
+  /** Ceux qui peuvent l'ouvrir (une fois) : les membres, sauf son auteur, à l'envoi. */
+  recipientIds: ReadonlySet<string>;
+}
+
+/** Résultat de l'ouverture d'un message à vue unique. */
+export type ViewOnceOpening =
+  | {
+      ok: true;
+      attachments: Attachment[];
+      /** Tous les destinataires l'ont ouvert : ses fichiers n'ont plus de raison d'être. */
+      isExhausted: boolean;
+    }
+  | { ok: false; error: string };
 
 /**
  * Messages d'une conversation, en mémoire uniquement et pour une heure au
@@ -28,6 +52,8 @@ export type NewMessage = Omit<
  */
 export class ConversationStore {
   private messages: ChatMessage[] = [];
+  /** Pièces jointes des messages à vue unique, par id de message. */
+  private readonly viewOnceSecrets = new Map<string, ViewOnceSecret>();
   private readonly receipts = new Map<string, ReadReceipt>();
   private lastSeq = 0;
 
@@ -41,23 +67,43 @@ export class ConversationStore {
 
   /** Retire les messages expirés ; `true` si la conversation n'en contient plus aucun. */
   pruneExpired(now = Date.now()): boolean {
-    this.messages = this.messages.filter(
-      (message) => Date.parse(message.expiresAt) > now,
-    );
+    this.messages = this.messages.filter((message) => {
+      const isAlive = Date.parse(message.expiresAt) > now;
+      if (!isAlive) this.viewOnceSecrets.delete(message.id);
+      return isAlive;
+    });
     return this.isEmpty();
+  }
+
+  find(messageId: string): ChatMessage | undefined {
+    return this.messages.find((item) => item.id === messageId);
   }
 
   /**
    * Ajoute un message et lui attribue son numéro d'ordre et sa date
    * d'expiration. Idempotent : un message déjà reçu (même id, ex. renvoi après
    * un timeout) est retourné tel quel avec `isNew: false`.
+   *
+   * `viewOnceFor` : message à vue unique, que ces destinataires ouvriront
+   * une fois chacun. Ses pièces jointes restent alors ici, seule leur
+   * annonce est diffusée.
    */
-  addMessage(input: NewMessage): { message: ChatMessage; isNew: boolean } {
-    const existing = this.messages.find((item) => item.id === input.id);
+  addMessage(
+    input: NewMessage,
+    { viewOnceFor }: { viewOnceFor?: readonly string[] } = {},
+  ): { message: ChatMessage; isNew: boolean } {
+    const existing = this.find(input.id);
     if (existing) return { message: existing, isNew: false };
 
     const message: ChatMessage = {
       ...input,
+      ...(viewOnceFor && {
+        attachments: [],
+        viewOnce: {
+          items: input.attachments.map(toViewOnceItem),
+          openedBy: [],
+        },
+      }),
       seq: ++this.lastSeq,
       expiresAt: new Date(
         Date.parse(input.createdAt) + MESSAGE_TTL_MS,
@@ -67,9 +113,58 @@ export class ConversationStore {
       reactions: [],
     };
     this.messages.push(message);
-    if (this.messages.length > HISTORY_LIMIT) this.messages.shift();
+    if (viewOnceFor) {
+      this.viewOnceSecrets.set(message.id, {
+        attachments: input.attachments,
+        recipientIds: new Set(viewOnceFor),
+      });
+    }
+    if (this.messages.length > HISTORY_LIMIT) {
+      const oldest = this.messages.shift();
+      if (oldest) this.viewOnceSecrets.delete(oldest.id);
+    }
 
     return { message, isNew: true };
+  }
+
+  /**
+   * Un destinataire ouvre un message à vue unique : il reçoit ses pièces
+   * jointes, et c'est la seule fois. Quand tous l'ont ouvert, le serveur
+   * l'oublie (`isExhausted`) : ses fichiers peuvent disparaître.
+   */
+  openViewOnce(messageId: string, user: ChatUser): ViewOnceOpening {
+    const message = this.find(messageId);
+    const secret = this.viewOnceSecrets.get(messageId);
+    if (!message?.viewOnce || message.deletedBy || !secret) {
+      return { ok: false, error: 'Ce contenu a déjà disparu' };
+    }
+    if (message.author.id === user.id) {
+      return { ok: false, error: 'Seuls ses destinataires peuvent l’ouvrir' };
+    }
+    if (!secret.recipientIds.has(user.id)) {
+      return {
+        ok: false,
+        error: 'Envoyé avant votre arrivée : il ne vous est pas destiné',
+      };
+    }
+    const { openedBy } = message.viewOnce;
+    if (openedBy.some((item) => item.id === user.id)) {
+      return { ok: false, error: 'Déjà ouvert : il ne s’ouvre qu’une fois' };
+    }
+
+    openedBy.push(user);
+    const isExhausted = [...secret.recipientIds].every((id) =>
+      openedBy.some((item) => item.id === id),
+    );
+    if (isExhausted) this.viewOnceSecrets.delete(messageId);
+    return { ok: true, attachments: secret.attachments, isExhausted };
+  }
+
+  /** Ses pièces jointes, y compris celles, gardées ici, d'une vue unique. */
+  private attachmentsOf(message: ChatMessage): Attachment[] {
+    return (
+      this.viewOnceSecrets.get(message.id)?.attachments ?? message.attachments
+    );
   }
 
   /**
@@ -144,6 +239,9 @@ export class ConversationStore {
     if (!found.ok) return found;
     const { message } = found;
 
+    if (message.viewOnce) {
+      return { ok: false, error: 'Un message à vue unique ne se modifie pas' };
+    }
     if (content === message.content)
       return { ok: true, message, changed: false };
     if (!content && message.attachments.length === 0) {
@@ -168,8 +266,10 @@ export class ConversationStore {
     const found = this.findChangeable(messageId, author);
     if (!found.ok) return found;
 
+    const attachments = this.attachmentsOf(found.message);
     this.messages = this.messages.filter((item) => item.id !== messageId);
-    return { ok: true, attachments: found.message.attachments };
+    this.viewOnceSecrets.delete(messageId);
+    return { ok: true, attachments };
   }
 
   /**
@@ -208,7 +308,11 @@ export class ConversationStore {
    * (même en partie). Il fait alors partie de la conversation pour de bon.
    */
   isSeenByOthers(message: ChatMessage): boolean {
-    if (message.listenedBy.length > 0 || message.listenProgress.length > 0) {
+    if (
+      message.listenedBy.length > 0 ||
+      message.listenProgress.length > 0 ||
+      (message.viewOnce?.openedBy.length ?? 0) > 0
+    ) {
       return true;
     }
     for (const receipt of this.receipts.values()) {
@@ -249,13 +353,16 @@ export class ConversationStore {
     const message = this.messages.find((item) => item.id === messageId);
     if (!message || message.deletedBy || message.call) return null;
 
-    const { author, attachments } = message;
+    const { author } = message;
+    const attachments = this.attachmentsOf(message);
+    this.viewOnceSecrets.delete(messageId);
     Object.assign(message, {
       content: '',
       attachments: [],
       reactions: [],
       listenedBy: [],
       listenProgress: [],
+      viewOnce: undefined,
       deletedBy: by,
     } satisfies Partial<ChatMessage>);
     return { author, attachments };

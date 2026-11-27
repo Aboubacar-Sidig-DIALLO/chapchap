@@ -1,4 +1,7 @@
-import type { Attachment } from '../attachments/attachment.types';
+import type {
+  Attachment,
+  VoiceMetadata,
+} from '../attachments/attachment.types';
 import type {
   CallParticipant,
   CallReaction,
@@ -53,6 +56,45 @@ export interface ChatMessage {
   deletedBy?: ChatUser;
   /** Date ISO 8601 de la dernière modification par son auteur (texte corrigé, pièce jointe retirée). */
   editedAt?: string;
+  /**
+   * Vue unique : ses pièces jointes ne sont pas diffusées (`attachments` est
+   * vide), seulement annoncées ; chaque destinataire les ouvre une fois.
+   */
+  viewOnce?: ViewOnce;
+}
+
+/** Genre d'une pièce jointe à vue unique, seule chose qu'on en sait avant de l'ouvrir. */
+export type ViewOnceKind = 'voice' | 'image' | 'video' | 'file';
+
+export interface ViewOnceItem {
+  kind: ViewOnceKind;
+  /** Durée d'un vocal. */
+  durationMs?: number;
+}
+
+export interface ViewOnce {
+  items: ViewOnceItem[];
+  /** Destinataires qui l'ont ouvert (et ne peuvent plus le rouvrir). */
+  openedBy: ChatUser[];
+}
+
+/** Une pièce jointe à vue unique, remise à celui qui l'ouvre, et à lui seul. */
+export interface ViewOnceFile {
+  kind: ViewOnceKind;
+  name: string;
+  mimeType: string;
+  /** Chemin relatif à l'API, valable une minute : `/attachments/once/<ticket>`. */
+  url: string;
+  /** Durée et forme d'onde d'un vocal. */
+  voice?: VoiceMetadata;
+}
+
+export type ViewOnceOpenAck =
+  { ok: true; files: ViewOnceFile[] } | { ok: false; error: string };
+
+export interface ViewOnceOpenedEvent {
+  messageId: string;
+  user: ChatUser;
 }
 
 export interface MessageDeletedEvent {
@@ -88,6 +130,8 @@ export interface SendMessagePayload {
   content: string;
   /** Ids obtenus via `POST /attachments`. */
   attachmentIds?: string[];
+  /** Pièces jointes à vue unique (le message ne contient alors pas de texte). */
+  viewOnce?: boolean;
 }
 
 export type SendMessageAck =
@@ -173,6 +217,8 @@ export interface ServerToClientEvents {
   'voice:progress': (event: ProgressEvent) => void;
   /** Les réactions d'un message ont changé (diffusé à tous). */
   'message:reactions': (event: ReactionsEvent) => void;
+  /** Un destinataire a ouvert un message à vue unique (diffusé à tous). */
+  'view-once:opened': (event: ViewOnceOpenedEvent) => void;
   /** Participants de l'appel, à la connexion puis à chaque changement (diffusé à tous). */
   'call:participants': (participants: CallParticipant[]) => void;
   /** Appel entre amis terminé par l'autre (raccroché, refusé, sans réponse) : on en sort. */

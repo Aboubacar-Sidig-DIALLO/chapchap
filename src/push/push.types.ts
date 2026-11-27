@@ -1,3 +1,5 @@
+import type { ViewOnceKind } from '../chat/chat.types';
+
 /**
  * Notification envoyée au navigateur, chiffrée de bout en bout jusqu'à lui.
  * Jamais le contenu d'un message : seulement qui, où, et quel genre.
@@ -20,7 +22,9 @@ export type MessagePreview =
   | { type: 'text' }
   | { type: 'voice'; durationMs: number }
   | { type: 'photo'; count: number }
-  | { type: 'file'; count: number };
+  | { type: 'file'; count: number }
+  /** Vue unique : son genre seulement (le premier, s'il y en a plusieurs). */
+  | { type: 'view-once'; kind: ViewOnceKind };
 
 export interface PushDelivery {
   /** Délai (s) au-delà duquel le service push abandonne la livraison. */

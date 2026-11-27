@@ -19,7 +19,11 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { AllowAnonymous } from '@thallesp/nestjs-better-auth';
+import {
+  AllowAnonymous,
+  Session,
+  type UserSession,
+} from '@thallesp/nestjs-better-auth';
 import type { Response } from 'express';
 import { diskStorage } from 'multer';
 import type { Attachment } from './attachment.types';
@@ -70,6 +74,30 @@ export class AttachmentsController {
   }
 
   /**
+   * Une pièce jointe à vue unique, remise à celui qui vient de l'ouvrir :
+   * le ticket (aléatoire, valable une minute) ne sert qu'à lui, avec sa
+   * session. Le fichier part d'un bloc, en téléchargement, sans cache : le
+   * client le garde en mémoire le temps de l'affichage, puis l'oublie.
+   */
+  @Get('once/:ticket')
+  @Header('X-Content-Type-Options', 'nosniff')
+  @Header('Cache-Control', 'no-store')
+  openOnce(
+    @Session() session: UserSession,
+    @Param('ticket') ticket: string,
+  ): StreamableFile {
+    const stored = this.attachmentsService.redeem(ticket, session.user.id);
+    if (!stored) throw new NotFoundException('Ce contenu a déjà disparu');
+
+    const { name, size } = stored.attachment;
+    return new StreamableFile(createReadStream(stored.path), {
+      type: 'application/octet-stream',
+      length: size,
+      disposition: contentDisposition('attachment', name),
+    });
+  }
+
+  /**
    * `?download` force le téléchargement, y compris pour une image.
    * Les requêtes partielles (`Range`) permettent de lire l'audio et de s'y déplacer.
    *
@@ -90,7 +118,7 @@ export class AttachmentsController {
     @Query('download') download?: string,
     @Headers('range') rangeHeader?: string,
   ): StreamableFile {
-    const stored = this.attachmentsService.find(id);
+    const stored = this.attachmentsService.findPublic(id);
     if (!stored) throw new NotFoundException('Pièce jointe introuvable');
 
     const secondsLeft = Math.max(

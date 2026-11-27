@@ -158,3 +158,97 @@ describe('ChatService (ménage des conversations)', () => {
     expect(service.conversation('direct:a:b').getHistory()).toHaveLength(0);
   });
 });
+
+describe('ConversationStore (vue unique)', () => {
+  const bob = { id: 'bob', name: 'Bob' };
+  const carol = { id: 'carol', name: 'Carol' };
+  const voice = {
+    id: 'v1',
+    name: 'vocal.webm',
+    mimeType: 'audio/webm',
+    size: 1,
+    url: '/attachments/v1',
+    voice: { durationMs: 4200, waveform: [] },
+  };
+
+  function sendOnce(store: ConversationStore, recipients = [bob.id]) {
+    return store.addMessage(
+      { id: 'm1', author: alice, content: '', attachments: [voice], createdAt },
+      { viewOnceFor: recipients },
+    ).message;
+  }
+
+  it('annonce le contenu sans jamais diffuser la pièce jointe', () => {
+    const message = sendOnce(new ConversationStore());
+
+    expect(message.attachments).toEqual([]);
+    expect(message.viewOnce).toEqual({
+      items: [{ kind: 'voice', durationMs: 4200 }],
+      openedBy: [],
+    });
+    expect(JSON.stringify(message)).not.toContain('/attachments/v1');
+  });
+
+  it('ne s’ouvre qu’une fois par destinataire', () => {
+    const store = new ConversationStore();
+    sendOnce(store, [bob.id, carol.id]);
+
+    expect(store.openViewOnce('m1', bob)).toEqual({
+      ok: true,
+      attachments: [voice],
+      isExhausted: false,
+    });
+    expect(store.openViewOnce('m1', bob).ok).toBe(false);
+    // Le dernier destinataire l'ouvre : le serveur l'oublie.
+    expect(store.openViewOnce('m1', carol)).toMatchObject({
+      ok: true,
+      isExhausted: true,
+    });
+    expect(store.find('m1')?.viewOnce?.openedBy).toEqual([bob, carol]);
+  });
+
+  it('refuse son auteur et ceux à qui il n’était pas destiné', () => {
+    const store = new ConversationStore();
+    sendOnce(store);
+
+    expect(store.openViewOnce('m1', alice).ok).toBe(false);
+    expect(store.openViewOnce('m1', carol).ok).toBe(false);
+  });
+
+  it('ouvert, il est vu : son auteur ne peut plus le retirer', () => {
+    const store = new ConversationStore();
+    sendOnce(store);
+    store.openViewOnce('m1', bob);
+
+    expect(store.unsendMessage('m1', alice).ok).toBe(false);
+  });
+
+  it('retiré avant d’être ouvert, il rend ses fichiers à effacer', () => {
+    const store = new ConversationStore();
+    sendOnce(store);
+
+    expect(store.unsendMessage('m1', alice)).toEqual({
+      ok: true,
+      attachments: [voice],
+    });
+    expect(store.openViewOnce('m1', bob).ok).toBe(false);
+  });
+
+  it('supprimé par un modérateur, il ne peut plus être ouvert', () => {
+    const store = new ConversationStore();
+    sendOnce(store);
+
+    expect(store.deleteMessage('m1', carol)?.attachments).toEqual([voice]);
+    expect(store.find('m1')?.viewOnce).toBeUndefined();
+    expect(store.openViewOnce('m1', bob).ok).toBe(false);
+  });
+
+  it('expiré, il ne peut plus être ouvert', () => {
+    const store = new ConversationStore();
+    sendOnce(store);
+
+    store.pruneExpired(sentAt + MESSAGE_TTL_MS);
+
+    expect(store.openViewOnce('m1', bob).ok).toBe(false);
+  });
+});

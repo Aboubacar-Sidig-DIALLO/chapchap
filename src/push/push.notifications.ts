@@ -1,4 +1,4 @@
-import type { ChatMessage } from '../chat/chat.types';
+import type { ChatMessage, ViewOnceKind } from '../chat/chat.types';
 import type {
   ConversationTarget,
   PublicUser,
@@ -15,9 +15,12 @@ import type { MessagePreview, PushNotification } from './push.types';
 
 /** Ce que contient un message (vocal, photos, fichiers ou texte), sans son contenu. */
 export function messagePreview(
-  message: Pick<ChatMessage, 'attachments'>,
+  message: Pick<ChatMessage, 'attachments' | 'viewOnce'>,
 ): MessagePreview {
-  const { attachments } = message;
+  const { attachments, viewOnce } = message;
+  if (viewOnce?.items[0]) {
+    return { type: 'view-once', kind: viewOnce.items[0].kind };
+  }
   const voice = attachments.find((attachment) => attachment.voice);
   if (voice?.voice) {
     return { type: 'voice', durationMs: voice.voice.durationMs };
@@ -32,6 +35,13 @@ export function messagePreview(
   }
   return { type: 'text' };
 }
+
+const VIEW_ONCE_LABELS: Record<ViewOnceKind, string> = {
+  voice: '🎙️ Vocal à écoute unique',
+  image: '📷 Photo à vue unique',
+  video: '🎬 Vidéo à vue unique',
+  file: '📎 Fichier à ouverture unique',
+};
 
 /** « 0:42 » */
 function formatDuration(ms: number) {
@@ -49,6 +59,8 @@ function describe(preview: MessagePreview) {
       return preview.count > 1 ? `📷 ${preview.count} photos` : '📷 Photo';
     case 'file':
       return preview.count > 1 ? `📎 ${preview.count} fichiers` : '📎 Fichier';
+    case 'view-once':
+      return VIEW_ONCE_LABELS[preview.kind];
     case 'text':
       return 'Nouveau message';
   }
