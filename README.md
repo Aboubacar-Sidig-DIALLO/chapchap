@@ -10,6 +10,7 @@ Backend NestJS de **chapchap**, une messagerie « la voix d'abord » : salon de 
 - **Réactions** aux messages (❤️ 😂 🔥 👏 😮 🙏).
 - **Pièces jointes** : envoi (10 Mo max), service avec requêtes `Range` (lecture audio sur Safari).
 - **Direct** (appel audio / vidéo) : signalisation WebRTC, réactions en direct, trace de l'appel déposée dans la conversation à la fin.
+- **Notifications push** (PWA) : messages, appels et demandes d'amis arrivent même application fermée, sans jamais le contenu des messages (« 🎙️ Message vocal · 0:42 »). Seuls les services push des navigateurs sont acceptés comme destination ; les abonnements morts sont effacés, ceux d'un compte aussi quand toutes ses sessions sont fermées.
 - **Talkie-walkie** : en maintenant le micro, la voix est relayée en direct (PCM 16 kHz) à ceux qui ont la conversation ouverte, une voix à la fois. Le même enregistrement part ensuite comme vocal (même id) : les absents le reçoivent, les auditeurs du direct le voient déjà « écouté ». Rien n'est conservé ; droits, débit et durée sont vérifiés par le serveur.
 
 ## Démarrage
@@ -25,6 +26,8 @@ Le serveur écoute sur `http://localhost:3001`.
 | --------------- | ----------------------- | -------------------------------------- |
 | `PORT`          | `3001`                  | Port HTTP et WebSocket                 |
 | `CLIENT_ORIGIN` | `http://localhost:3000` | Origine du front autorisée (CORS)      |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | — | Clés des notifications push (`npx web-push generate-vapid-keys`). Sans elles, pas de notifications. À garder : en changer désabonne tous les navigateurs. |
+| `VAPID_SUBJECT` | `mailto:notifications@localhost` | Contact de l'expéditeur des notifications (`mailto:` ou `https:`), exigé par Apple en production. |
 
 Les données (messages, accusés, direct) sont gardées en mémoire et perdues au redémarrage ; les pièces jointes sont écrites dans `uploads/`.
 
@@ -35,6 +38,7 @@ src/
   chat/         passerelle Socket.io du salon (messages, accusés, réactions, écoute)
   call/         signalisation du direct (WebRTC) et trace des appels
   talkie/       talkie-walkie : prise de parole et relais de la voix en direct
+  push/         notifications push (PWA) : abonnements des navigateurs et envoi
   attachments/  envoi et service des pièces jointes
 ```
 

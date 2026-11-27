@@ -40,6 +40,8 @@ model User {
   groupMemberships GroupMember[]
   ownedGroups      Group[]
 
+  pushSubscriptions PushSubscription[]
+
   @@map("user")
 }
 
@@ -169,4 +171,24 @@ model GroupMember {
   @@id([groupId, userId])
   @@index([userId])
   @@map("group_member")
+}
+
+// ─── Notifications push ─────────────────────────────────────────────────────
+
+/// Un navigateur (ou une app installée) qui reçoit les notifications push d'un utilisateur.
+/// Sans contenu de message : seulement de quoi joindre le service de notification du navigateur.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Adresse du service push du navigateur ; unique : un navigateur appartient au dernier compte qui s'y est abonné.
+  endpoint  String   @unique
+  /// Clés de chiffrement fournies par le navigateur (le contenu est chiffré de bout en bout jusqu'à lui).
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("push_subscription")
 }

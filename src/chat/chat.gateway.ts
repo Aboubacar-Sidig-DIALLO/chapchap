@@ -16,6 +16,7 @@ import { AttachmentsService } from '../attachments/attachments.service';
 import { accountEvents } from '../auth/account-events';
 import { authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
+import { messagePreview } from '../push/push.notifications';
 import {
   type Conversation,
   ConversationAccessService,
@@ -601,6 +602,7 @@ export class ChatGateway
         messageId: message.id,
         expiresAt: message.expiresAt,
       },
+      messagePreview(message),
     );
   }
 

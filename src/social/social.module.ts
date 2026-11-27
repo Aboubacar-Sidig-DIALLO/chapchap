@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PushModule } from '../push/push.module';
 import { AccountEventsListener } from './account-events.listener';
 import { ConversationAccessService } from './conversation-access.service';
 import { FriendsController } from './friends.controller';
@@ -18,6 +19,8 @@ import { SocialGateway } from './social.gateway';
  * du module d'appel les appels en cours, pour les annoncer.
  */
 @Module({
+  // Ce qui est annoncé sur l'accueil l'est aussi par notification push.
+  imports: [PushModule],
   controllers: [FriendsController, GroupsController, GroupPhotosController],
   providers: [
     AccountEventsListener,

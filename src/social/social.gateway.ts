@@ -15,6 +15,18 @@ import { accountEvents } from '../auth/account-events';
 import { type AuthSocketData, authenticateSocket } from '../auth/socket-auth';
 import { CLIENT_ORIGIN } from '../config';
 import {
+  CALL_PUSH_TTL_S,
+  MESSAGE_PUSH_TTL_S,
+  SOCIAL_PUSH_TTL_S,
+} from '../push/push.config';
+import {
+  callNotification,
+  messageNotification,
+  socialNotification,
+} from '../push/push.notifications';
+import { PushService } from '../push/push.service';
+import type { MessagePreview } from '../push/push.types';
+import {
   type Conversation,
   directKey,
   parseConversationRef,
@@ -81,6 +93,7 @@ export class SocialGateway
     private readonly friendsService: FriendsService,
     private readonly groupsService: GroupsService,
     private readonly ongoingCalls: OngoingCallsService,
+    private readonly push: PushService,
   ) {}
 
   /** Seules les connexions avec une session valide sont acceptées. */
@@ -160,6 +173,12 @@ export class SocialGateway
         this.server
           .to(room)
           .emit('call:started', { conversation: target, startedBy });
+        // Application fermée : l'appel sonne quand même, le temps de la sonnerie.
+        this.push.send(
+          [userId],
+          callNotification(target, startedBy, new Date().toISOString()),
+          { ttl: CALL_PUSH_TTL_S, urgency: 'high' },
+        );
       }
     }
   }
@@ -182,12 +201,37 @@ export class SocialGateway
   notifyChange(userIds: string[], notice: SocialNotice | null = null) {
     if (userIds.length === 0) return;
     this.server.to(userIds.map(userRoom)).emit('social:changed', { notice });
+    if (notice) {
+      this.push.send(
+        userIds,
+        socialNotification(notice, new Date().toISOString()),
+        { ttl: SOCIAL_PUSH_TTL_S, urgency: 'normal' },
+      );
+    }
   }
 
-  /** Signale un nouveau message aux destinataires (sur l'accueil : pastille et annonce). */
-  notifyMessage(userIds: string[], notice: MessageNotice) {
+  /**
+   * Signale un nouveau message aux destinataires : pastille et annonce sur
+   * l'accueil, notification push hors de l'application (`preview` : son genre,
+   * jamais son contenu).
+   */
+  notifyMessage(
+    userIds: string[],
+    notice: MessageNotice,
+    preview: MessagePreview,
+  ) {
     if (userIds.length === 0) return;
     this.server.to(userIds.map(userRoom)).emit('social:message', notice);
+    this.push.send(
+      userIds,
+      messageNotification(
+        notice.conversation,
+        notice.from,
+        preview,
+        new Date().toISOString(),
+      ),
+      { ttl: MESSAGE_PUSH_TTL_S, urgency: 'high' },
+    );
   }
 
   /** Signale aux destinataires qu'un message annoncé n'est plus à lire (pastille décomptée). */
